@@ -398,8 +398,13 @@ local function rollup(checks)
   return fail and "✗CI" or (pend and "●CI") or (ok and "✓CI") or "—"
 end
 
--- right-side floating panel (read-only markdown; q closes)
+-- right-side floating panel (read-only markdown; q closes). The last panel's
+-- content is kept in _G so <leader>gt can re-open it after closing without a
+-- refetch. Called with `lines` to set new content, or nil to re-show the last.
 local function pr_panel(lines)
+  if lines then _G.__pr_panel_lines = lines end
+  lines = _G.__pr_panel_lines
+  if not lines then return end
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].filetype = "markdown"
@@ -407,12 +412,25 @@ local function pr_panel(lines)
   vim.bo[buf].modifiable = false
   local w = math.min(84, math.floor(vim.o.columns * 0.5))
   local h = math.floor(vim.o.lines * 0.85)
-  local win = vim.api.nvim_open_win(buf, true, {
+  _G.__pr_panel_win = vim.api.nvim_open_win(buf, true, {
     relative = "editor", width = w, height = h, col = vim.o.columns - w - 1, row = 1,
     style = "minimal", border = "rounded", title = " PR ", title_pos = "center",
   })
-  vim.wo[win].wrap = true
+  vim.wo[_G.__pr_panel_win].wrap = true
   vim.keymap.set("n", "q", "<cmd>close<cr>", { buffer = buf, nowait = true })
+end
+
+-- toggle the PR panel: hide if open, re-show the last PR's panel if closed
+local function toggle_pr_panel()
+  local w = _G.__pr_panel_win
+  if w and vim.api.nvim_win_is_valid(w) then
+    vim.api.nvim_win_close(w, true)
+    _G.__pr_panel_win = nil
+  elseif _G.__pr_panel_lines then
+    pr_panel(nil)
+  else
+    vim.notify("No PR panel yet — open a PR with <leader>gP", vim.log.levels.INFO)
+  end
 end
 
 local function body_or_none(s)
@@ -583,6 +601,7 @@ end
 
 map("n", "<leader>gr", review_branch, { desc = "Review a branch/PR (worktree)" })
 map("n", "<leader>gP", review_pr, { desc = "Review a forge PR (worktree + panel)" })
+map("n", "<leader>gt", toggle_pr_panel, { desc = "Toggle PR panel" })
 map("n", "<leader>gR", cleanup_review, { desc = "Finish PR review (remove worktree)" })
 
 -- ---------------------------------------------------------------------------
