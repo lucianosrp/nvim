@@ -1,0 +1,16 @@
+# Machine-specific state — generated per machine, never committed.
+
+# vim.pack lockfile (plugin commits resolved per machine; regenerated on use)
+nvim-pack-lock.json
+
+# DankMaterialShell-generated palette (written by DMS's matugen integration).
+# Absent here on purpose: without DMS the `dank` scheme silently falls back to
+# teal. If you run DMS, it regenerates this locally.
+lua/plugins/dankcolors.lua
+lua/plugins/
+lua/
+
+# Editor/OS noise
+*.bak
+*.bak.*
+.DS_Store
