@@ -93,7 +93,7 @@ of every mapping.
 | `<leader>*` | Grep word under cursor |
 | `<leader>b` / `<leader>o` | Buffers / recent files |
 | `<leader>s` / `<leader>S` | Document / workspace symbols |
-| `<leader>x` | Document diagnostics |
+| `<leader>x` / `<leader>X` | Document / workspace diagnostics |
 | `<leader>R` | Resume last picker |
 | `<leader>?` | Help tags |
 | `<leader>k` | Keymaps cheatsheet |
@@ -116,6 +116,7 @@ of every mapping.
 | `]h` `[h` | Next / prev hunk |
 | `<leader>hp` `<leader>hs` `<leader>hr` | Preview / stage / reset hunk |
 | `<leader>hb` `<leader>hd` `<leader>hq` | Blame / diff file / all hunks → quickfix |
+| `<leader>gs` | Git status (changed files — fuzzy, with diff preview) |
 
 ### Diff & PR review
 | Key | Action |
@@ -125,10 +126,17 @@ of every mapping.
 | `<leader>gp` | Diff: vs previous commit |
 | `<leader>gh` `<leader>gl` | File / repo history |
 | `<leader>gc` | Close diffview |
-| `<leader>gr` | **Review a branch/PR** in a throwaway worktree |
+| `<leader>gr` | **Review a branch/PR** in a throwaway worktree (pure git, tokenless) |
+| `<leader>gP` | **Forge PR review** — list open PRs (GitHub/Bitbucket) with status, pick one → worktree + panel |
+| `<leader>gt` | Toggle the PR panel (description / status / comments / inline comments) |
 | `<leader>gR` | Finish review (remove the worktree) |
 
 Inside diffview: `<Tab>`/`<S-Tab>` next/prev file, `gf` jump to real file, `g?` help.
+
+**`<leader>gP`** detects the forge from `origin`: GitHub via the `gh` CLI,
+Bitbucket via its REST API (set `BITBUCKET_USER` + `BITBUCKET_TOKEN`). The panel
+shows the PR **description, status** (draft / merged / approved / CI), **comments**,
+and **inline per-line comments**; `<leader>gt` hides/re-shows it.
 
 ---
 
@@ -285,3 +293,7 @@ over plugin queries (and fully replace them unless they start with `; extends`).
   `<leader>cd` re-points it to the current file's directory.
 - **A plugin didn't load** — `:lua vim.pack.update()`, then restart.
 - **Health check** — `:checkhealth vim.lsp` / `:checkhealth nvim-treesitter`.
+
+## License
+
+[MIT](LICENSE) © Luciano Scarpulla
