@@ -209,7 +209,16 @@ map("n", "<leader>s", fzf_cmd("lsp_document_symbols"), { desc = "Document symbol
 map("n", "<leader>S", fzf_cmd("lsp_live_workspace_symbols"), { desc = "Workspace symbols" })
 map("n", "<leader>x", fzf_cmd("diagnostics_document"), { desc = "Document diagnostics" })
 map("n", "<leader>X", fzf_cmd("diagnostics_workspace"), { desc = "Workspace diagnostics" })
-map("n", "<leader>gs", fzf_cmd("git_status"), { desc = "Git status (changed files)" })
+map("n", "<leader>gs", function()
+  local f = load_fzf()
+  if not f then return end
+  local root = vim.fs.root(0, ".git") -- run git from the buffer's repo, not nvim's cwd
+  if not root then
+    vim.notify("Not in a git repository", vim.log.levels.WARN)
+    return
+  end
+  f.git_status({ cwd = root })
+end, { desc = "Git status (changed files)" })
 map("n", "<leader>?", fzf_cmd("helptags"), { desc = "Help tags" })
 map("n", "<leader>k", fzf_cmd("keymaps"), { desc = "Keymaps cheatsheet" })
 -- Colorscheme picker, minus base16-nvim's ~100 bundled `base16-*` schemes
@@ -304,49 +313,276 @@ local function cleanup_review()
   )
 end
 
-local function review_branch()
-  local branch = vim.trim(vim.fn.input("Review branch: "))
-  if branch == "" then return end
-  local file = vim.api.nvim_buf_get_name(0)
+local function git_root_of(buf)
+  local file = vim.api.nvim_buf_get_name(buf or 0)
   local dir = file ~= "" and vim.fs.dirname(file) or vim.fn.getcwd()
-  local root = vim.trim((vim.system({ "git", "-C", dir, "rev-parse", "--show-toplevel" }, { text = true }):wait().stdout) or "")
-  if root == "" then
-    vim.notify("Not inside a git repo: " .. dir, vim.log.levels.ERROR)
-    return
-  end
-  local function run(cmd) return vim.system(cmd, { cwd = root, text = true }):wait() end
-  -- base branch: ask the remote authoritatively (local origin/HEAD can be
-  -- stale), then let the user confirm/override the pre-filled guess.
-  local lsr = run({ "git", "ls-remote", "--symref", "origin", "HEAD" })
-  local guess = (lsr.stdout or ""):match("ref:%s+refs/heads/(%S+)") or "main"
-  local base = vim.trim(vim.fn.input("Base branch: ", guess))
-  if base == "" then return end
+  local r = vim.trim((vim.system({ "git", "-C", dir, "rev-parse", "--show-toplevel" }, { text = true }):wait().stdout) or "")
+  return r ~= "" and r or nil
+end
+
+-- Core: fetch a branch into a throwaway worktree + open diffview vs base.
+-- Shared by <leader>gr (prompted) and <leader>gP (PR picker). Returns ok.
+local function open_review(root, branch, base)
+  local function run(c) return vim.system(c, { cwd = root, text = true }):wait() end
   vim.notify("Fetching " .. branch .. " …", vim.log.levels.INFO)
-  local f = run({ "git", "fetch", "origin", branch })
-  if f.code ~= 0 then
-    vim.notify("git fetch failed:\n" .. (f.stderr or ""), vim.log.levels.ERROR)
-    return
+  if run({ "git", "fetch", "origin", branch }).code ~= 0 then
+    vim.notify("git fetch failed for " .. branch, vim.log.levels.ERROR)
+    return false
   end
   run({ "git", "fetch", "origin", base }) -- make the base ref current
-  cleanup_review() -- tear down any previous review first
-  -- throwaway worktree, detached at the fetched tip (no local branch, current
-  -- checkout untouched). Path is repo+branch scoped under Neovim's cache.
+  cleanup_review()                         -- tear down any previous review
   local wt = vim.fs.joinpath(vim.fn.stdpath("cache"), "pr-review",
     vim.fs.basename(root), (branch:gsub("[^%w._-]", "-")))
   vim.fn.mkdir(vim.fs.dirname(wt), "p")
-  vim.system({ "git", "-C", root, "worktree", "remove", "--force", wt }, { text = true }):wait() -- clear stale
-  local add = run({ "git", "worktree", "add", "--detach", wt, "origin/" .. branch })
-  if add.code ~= 0 then
-    vim.notify("git worktree add failed:\n" .. (add.stderr or ""), vim.log.levels.ERROR)
-    return
+  vim.system({ "git", "-C", root, "worktree", "remove", "--force", wt }, { text = true }):wait()
+  if run({ "git", "worktree", "add", "--detach", wt, "origin/" .. branch }).code ~= 0 then
+    vim.notify("git worktree add failed", vim.log.levels.ERROR)
+    return false
   end
   _G.__pr_review = { wt = wt, root = root, prev = vim.fn.getcwd() }
   vim.cmd.tcd(wt) -- review inside the worktree; diffview targets it
   if load_diffview() then vim.cmd("DiffviewOpen origin/" .. base .. "...HEAD") end
-  vim.notify(branch .. " vs " .. base .. " (worktree) — <leader>gR when done", vim.log.levels.INFO)
+  return true
+end
+
+local function review_branch()
+  local root = git_root_of(0)
+  if not root then
+    vim.notify("Not inside a git repo", vim.log.levels.ERROR)
+    return
+  end
+  local branch = vim.trim(vim.fn.input("Review branch: "))
+  if branch == "" then return end
+  -- base = remote's authoritative default (local origin/HEAD can be stale)
+  local lsr = vim.system({ "git", "-C", root, "ls-remote", "--symref", "origin", "HEAD" }, { text = true }):wait()
+  local guess = (lsr.stdout or ""):match("ref:%s+refs/heads/(%S+)") or "main"
+  local base = vim.trim(vim.fn.input("Base branch: ", guess))
+  if base == "" then return end
+  if open_review(root, branch, base) then
+    vim.notify(branch .. " vs " .. base .. " (worktree) — <leader>gR when done", vim.log.levels.INFO)
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- <leader>gP — forge-aware PR review. Detects GitHub (gh) or Bitbucket (REST
+-- API via BITBUCKET_USER + BITBUCKET_TOKEN) from origin, lists open PRs with
+-- status, and on pick opens the PR branch in a worktree (open_review) plus a
+-- floating panel: description, status, comments, and inline per-line comments.
+-- A few calls each: list (1), then detail+comments on the chosen PR.
+-- ---------------------------------------------------------------------------
+local function sysjson(cmd, cwd)
+  local ok, r = pcall(function() return vim.system(cmd, { text = true, cwd = cwd }):wait() end)
+  if not ok or r.code ~= 0 then return nil end
+  local jok, data = pcall(vim.json.decode, r.stdout or "")
+  return jok and data or nil
+end
+
+local function forge_of(root)
+  local url = vim.trim((vim.system({ "git", "-C", root, "remote", "get-url", "origin" }, { text = true }):wait().stdout) or "")
+  if url:find("github.com", 1, true) then return "github" end
+  if url:find("bitbucket.org", 1, true) then
+    local ws, repo = url:match("bitbucket%.org[:/]([^/]+)/([^/%.]+)")
+    return "bitbucket", ws or vim.env.BITBUCKET_WORKSPACE, repo or vim.env.BITBUCKET_REPO
+  end
+end
+
+-- CI rollup → one glyph from a list of check/status objects
+local function rollup(checks)
+  local fail, pend, ok = false, false, false
+  for _, c in ipairs(checks or {}) do
+    local s = (c.conclusion or c.state or c.status or ""):upper()
+    if s:find("FAIL") or s == "ERROR" then fail = true
+    elseif s:find("SUCCESS") or s == "COMPLETED" then ok = true -- SUCCESS (gh) / SUCCESSFUL (bitbucket)
+    elseif s ~= "" then pend = true end
+  end
+  return fail and "✗CI" or (pend and "●CI") or (ok and "✓CI") or "—"
+end
+
+-- right-side floating panel (read-only markdown; q closes)
+local function pr_panel(lines)
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].filetype = "markdown"
+  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].modifiable = false
+  local w = math.min(84, math.floor(vim.o.columns * 0.5))
+  local h = math.floor(vim.o.lines * 0.85)
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = "editor", width = w, height = h, col = vim.o.columns - w - 1, row = 1,
+    style = "minimal", border = "rounded", title = " PR ", title_pos = "center",
+  })
+  vim.wo[win].wrap = true
+  vim.keymap.set("n", "q", "<cmd>close<cr>", { buffer = buf, nowait = true })
+end
+
+local function body_or_none(s)
+  return (s and s ~= "") and s or "_(none)_"
+end
+
+-- GitHub (gh)
+local function gh_prs(root)
+  local d = sysjson({ "gh", "pr", "list", "--limit", "40", "--json",
+    "number,title,author,isDraft,reviewDecision,statusCheckRollup,headRefName,baseRefName" }, root)
+  if not d then return nil end
+  local items = {}
+  for _, p in ipairs(d) do
+    local tags = {}
+    if p.isDraft then tags[#tags + 1] = "✎draft" end
+    if p.reviewDecision == "APPROVED" then tags[#tags + 1] = "✓approved"
+    elseif p.reviewDecision == "CHANGES_REQUESTED" then tags[#tags + 1] = "✗changes" end
+    tags[#tags + 1] = rollup(p.statusCheckRollup)
+    items[#items + 1] = {
+      id = p.number, branch = p.headRefName, base = p.baseRefName,
+      display = string.format("#%-4d %-24s %s  (@%s)", p.number, table.concat(tags, " "), p.title, (p.author or {}).login or "?"),
+    }
+  end
+  return items
+end
+
+local function gh_panel_lines(root, num)
+  local d = sysjson({ "gh", "pr", "view", tostring(num), "--json",
+    "number,title,author,body,state,isDraft,reviewDecision,statusCheckRollup,comments,baseRefName,headRefName" }, root)
+  if not d then return { "# Failed to load PR #" .. num } end
+  local L = {
+    ("# PR #%d — %s"):format(d.number, d.title),
+    ("`%s → %s` · **%s**%s · %s · review: %s"):format(d.headRefName, d.baseRefName, d.state,
+      d.isDraft and " (draft)" or "", rollup(d.statusCheckRollup), d.reviewDecision or "none"),
+    "by @" .. ((d.author or {}).login or "?"), "", "## Description",
+  }
+  for _, ln in ipairs(vim.split(body_or_none(d.body), "\n")) do L[#L + 1] = ln end
+  if d.comments and #d.comments > 0 then
+    L[#L + 1] = ""; L[#L + 1] = "## Comments"
+    for _, c in ipairs(d.comments) do
+      L[#L + 1] = "**@" .. ((c.author or {}).login or "?") .. ":**"
+      for _, ln in ipairs(vim.split(c.body or "", "\n")) do L[#L + 1] = "> " .. ln end
+    end
+  end
+  local inl = sysjson({ "gh", "api", ("repos/{owner}/{repo}/pulls/%d/comments"):format(num) }, root)
+  if inl and #inl > 0 then
+    L[#L + 1] = ""; L[#L + 1] = "## Inline comments"
+    for _, c in ipairs(inl) do
+      L[#L + 1] = ("`%s:%s` **@%s:**"):format(c.path, tostring(c.line or c.original_line or "?"), (c.user or {}).login or "?")
+      for _, ln in ipairs(vim.split(c.body or "", "\n")) do L[#L + 1] = "> " .. ln end
+    end
+  end
+  return L
+end
+
+-- Bitbucket (REST API v2.0)
+local function bb_curl(path, query)
+  local user, token = vim.env.BITBUCKET_USER, vim.env.BITBUCKET_TOKEN
+  if not (user and token) then
+    vim.notify("Set BITBUCKET_USER and BITBUCKET_TOKEN for Bitbucket PRs", vim.log.levels.ERROR)
+    return nil
+  end
+  return sysjson({ "curl", "-s", "-u", user .. ":" .. token,
+    "https://api.bitbucket.org/2.0/repositories/" .. path .. (query and ("?" .. query) or "") })
+end
+
+local function bb_prs(ws, repo)
+  local d = bb_curl(("%s/%s/pullrequests"):format(ws, repo),
+    "state=OPEN&pagelen=40&fields=values.id,values.title,values.author.display_name,values.draft,values.source.branch.name,values.destination.branch.name")
+  if not d then return nil end
+  local items = {}
+  for _, p in ipairs(d.values or {}) do
+    items[#items + 1] = {
+      id = p.id, branch = p.source.branch.name, base = p.destination.branch.name,
+      display = ("#%-4d %-8s %s  (%s)"):format(p.id, p.draft and "✎draft" or "", p.title, (p.author or {}).display_name or "?"),
+    }
+  end
+  return items
+end
+
+local function bb_panel_lines(ws, repo, id)
+  local base = ("%s/%s/pullrequests/%d"):format(ws, repo, id)
+  local d = bb_curl(base, "fields=title,state,draft,summary.raw,participants.approved,participants.user.display_name,source.commit.hash,source.branch.name,destination.branch.name")
+  if not d then return { "# Failed to load PR #" .. id } end
+  local approvals = {}
+  for _, p in ipairs(d.participants or {}) do
+    if p.approved then approvals[#approvals + 1] = (p.user or {}).display_name or "?" end
+  end
+  local ci, sha = "—", (((d.source or {}).commit or {}).hash)
+  if sha then ci = rollup((bb_curl(("%s/%s/commit/%s/statuses"):format(ws, repo, sha), "fields=values.state") or {}).values) end
+  local L = {
+    ("# PR #%d — %s"):format(id, d.title),
+    ("`%s → %s` · **%s**%s · %s · approvals: %s"):format(
+      ((d.source or {}).branch or {}).name or "?", ((d.destination or {}).branch or {}).name or "?",
+      d.state, d.draft and " (draft)" or "", ci, #approvals > 0 and table.concat(approvals, ", ") or "none"),
+    "", "## Description",
+  }
+  for _, ln in ipairs(vim.split(body_or_none((d.summary or {}).raw), "\n")) do L[#L + 1] = ln end
+  local cm = bb_curl(base .. "/comments", "pagelen=50&fields=values.content.raw,values.user.display_name,values.inline.path,values.inline.to,values.inline.from")
+  local general, inline = {}, {}
+  for _, c in ipairs((cm or {}).values or {}) do
+    local body, who = (c.content or {}).raw or "", (c.user or {}).display_name or "?"
+    if c.inline then
+      inline[#inline + 1] = { path = c.inline.path, line = c.inline.to or c.inline.from, who = who, body = body }
+    else
+      general[#general + 1] = { who = who, body = body }
+    end
+  end
+  if #general > 0 then
+    L[#L + 1] = ""; L[#L + 1] = "## Comments"
+    for _, c in ipairs(general) do
+      L[#L + 1] = "**" .. c.who .. ":**"
+      for _, ln in ipairs(vim.split(c.body, "\n")) do L[#L + 1] = "> " .. ln end
+    end
+  end
+  if #inline > 0 then
+    L[#L + 1] = ""; L[#L + 1] = "## Inline comments"
+    for _, c in ipairs(inline) do
+      L[#L + 1] = ("`%s:%s` **%s:**"):format(c.path or "?", tostring(c.line or "?"), c.who)
+      for _, ln in ipairs(vim.split(c.body, "\n")) do L[#L + 1] = "> " .. ln end
+    end
+  end
+  return L
+end
+
+local function review_pr()
+  local root = git_root_of(0)
+  if not root then
+    vim.notify("Not inside a git repo", vim.log.levels.ERROR)
+    return
+  end
+  local forge, ws, repo = forge_of(root)
+  if not forge then
+    vim.notify("origin is not GitHub or Bitbucket", vim.log.levels.ERROR)
+    return
+  end
+  local f = load_fzf()
+  if not f then return end
+  vim.notify("Loading " .. forge .. " PRs …", vim.log.levels.INFO)
+  local items = (forge == "github") and gh_prs(root) or bb_prs(ws, repo)
+  if not items then
+    vim.notify("Failed to list PRs", vim.log.levels.ERROR)
+    return
+  end
+  if #items == 0 then
+    vim.notify("No open PRs", vim.log.levels.INFO)
+    return
+  end
+  local lookup, displays = {}, {}
+  for _, it in ipairs(items) do
+    lookup[it.display] = it
+    displays[#displays + 1] = it.display
+  end
+  f.fzf_exec(displays, {
+    prompt = "PR> ",
+    actions = {
+      ["default"] = function(sel)
+        local it = sel and sel[1] and lookup[sel[1]]
+        if not it then return end
+        if open_review(root, it.branch, it.base) then
+          pr_panel((forge == "github") and gh_panel_lines(root, it.id) or bb_panel_lines(ws, repo, it.id))
+          vim.notify("PR #" .. it.id .. " — <leader>gR when done", vim.log.levels.INFO)
+        end
+      end,
+    },
+  })
 end
 
 map("n", "<leader>gr", review_branch, { desc = "Review a branch/PR (worktree)" })
+map("n", "<leader>gP", review_pr, { desc = "Review a forge PR (worktree + panel)" })
 map("n", "<leader>gR", cleanup_review, { desc = "Finish PR review (remove worktree)" })
 
 -- ---------------------------------------------------------------------------
