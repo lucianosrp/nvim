@@ -67,7 +67,12 @@ irm https://raw.githubusercontent.com/lucianosrp/nvim/main/install.ps1 | iex
 Uses `winget` (or `scoop`). Treesitter parser compilation needs a C compiler on
 `PATH` (zig or MSVC Build Tools); without one, syntax still works.
 
-**Updating:** re-run the installer, or `git -C ~/.config/nvim pull`.
+**Updating:** re-run the installer, or `git -C ~/.config/nvim pull`. Re-runs are
+safe — the installer **stashes any local edits, pulls, then re-applies them**
+(worst case they're kept in `git stash`). Your **colorscheme also survives
+updates**: the active scheme is remembered in the state dir (outside git), so
+picking one with `<leader>uc` (or `:colorscheme`) sticks across restarts *and*
+upgrades — `git pull` never touches it.
 
 > **Source repo:** the installers clone `lucianosrp/nvim`. Self-hosting a fork?
 > Set `NVIM_CONFIG_REPO=<url>` (bash) / `$env:NVIM_CONFIG_REPO` (pwsh).

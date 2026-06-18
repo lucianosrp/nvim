@@ -102,7 +102,19 @@ if (Have uv) {
 # ---------------------------------------------------------------------------
 if (Test-Path (Join-Path $ConfigDir ".git")) {
   Info "Updating existing config in $ConfigDir…"
+  # Preserve any local edits across the update: stash -> pull -> pop.
+  $stashed = $false
+  git -C $ConfigDir diff --quiet HEAD 2>$null
+  if ($LASTEXITCODE -ne 0) {
+    git -C $ConfigDir stash push -u -m "install.ps1 pre-update" | Out-Null
+    if ($LASTEXITCODE -eq 0) { $stashed = $true; Info "Stashed your local edits." }
+  }
   git -C $ConfigDir pull --ff-only
+  if ($stashed) {
+    git -C $ConfigDir stash pop
+    if ($LASTEXITCODE -ne 0) { Warn "Your edits are safe in 'git stash' - reapply: git -C $ConfigDir stash pop" }
+    else { Info "Re-applied your local edits." }
+  }
 } else {
   if (Test-Path $ConfigDir) {
     $bak = "$ConfigDir.bak." + (Get-Date -Format "yyyyMMddHHmmss")

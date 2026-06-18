@@ -632,7 +632,23 @@ local function transparent()
 end
 
 vim.api.nvim_create_autocmd("ColorScheme", { group = aug, callback = transparent })
-vim.cmd.colorscheme("dank")
+-- Persisted colorscheme: remembered across restarts AND config updates. The
+-- choice lives in the STATE dir (outside the git-tracked config), so an
+-- installer `git pull` never touches it. Saved on exit, so <leader>uc and
+-- :colorscheme both stick. Defaults to dank (which itself → teal without DMS).
+local theme_file = vim.fn.stdpath("state") .. "/colorscheme"
+local function read_theme()
+  local ok, lines = pcall(vim.fn.readfile, theme_file)
+  if ok and lines[1] and lines[1] ~= "" then return lines[1] end
+  return "dank"
+end
+if not pcall(vim.cmd.colorscheme, read_theme()) then pcall(vim.cmd.colorscheme, "teal") end
+vim.api.nvim_create_autocmd("VimLeavePre", {
+  group = aug,
+  callback = function()
+    if vim.g.colors_name then pcall(vim.fn.writefile, { vim.g.colors_name }, theme_file) end
+  end,
+})
 
 -- ---------------------------------------------------------------------------
 -- Hot-reload: re-source init.lua when it changes — saved inside Neovim

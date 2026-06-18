@@ -152,7 +152,21 @@ uv tool install ruff >/dev/null 2>&1 || uv tool upgrade ruff || warn "ruff insta
 # ---------------------------------------------------------------------------
 if [ -d "$CONFIG_DIR/.git" ]; then
   info "Updating existing config in $CONFIG_DIR…"
-  git -C "$CONFIG_DIR" pull --ff-only || warn "git pull failed; leaving $CONFIG_DIR as-is."
+  # Preserve any local edits across the update: stash → pull → pop. Worst case
+  # your edits stay safe in `git stash`. (Your colorscheme is stored elsewhere,
+  # in the state dir, so it's never affected by this.)
+  _stashed=0
+  if ! git -C "$CONFIG_DIR" diff --quiet HEAD 2>/dev/null; then
+    git -C "$CONFIG_DIR" stash push -u -m "install.sh pre-update" >/dev/null 2>&1 && _stashed=1 && info "Stashed your local edits."
+  fi
+  git -C "$CONFIG_DIR" pull --ff-only || warn "Couldn't fast-forward (local commits?); tree left unchanged."
+  if [ "$_stashed" = 1 ]; then
+    if git -C "$CONFIG_DIR" stash pop >/dev/null 2>&1; then
+      info "Re-applied your local edits."
+    else
+      warn "Your edits are safe in 'git stash' — reapply with: git -C \"$CONFIG_DIR\" stash pop"
+    fi
+  fi
 else
   if [ -e "$CONFIG_DIR" ]; then
     BAK="$CONFIG_DIR.bak.$(date +%Y%m%d%H%M%S)"
