@@ -28,6 +28,23 @@ have() { command -v "$1" >/dev/null 2>&1; }
 SUDO=""
 [ "$(id -u)" -ne 0 ] && have sudo && SUDO="sudo"
 
+NO_ANIM=0
+for a in "$@"; do [ "$a" = "--no-anim" ] && NO_ANIM=1; done
+
+# A tiny send-off animation. Disable with --no-anim; auto-skipped when stdout
+# isn't a terminal (so piped/CI logs stay clean).
+play_anim() {
+  [ "$NO_ANIM" = 1 ] && return 0
+  [ -t 1 ] || return 0
+  local w=44 pos
+  printf '\n'
+  for ((pos = 0; pos <= w; pos += 2)); do
+    printf '\r  %s}==>' "$(printf '%*s' "$pos" '' | tr ' ' '.')"
+    sleep 0.03 || true
+  done
+  printf '\r\033[K  \033[32m*\033[0m  blast off — nvim is ready!  \033[2m(<Space>k for keys)\033[0m\n\n'
+}
+
 # ---------------------------------------------------------------------------
 # 1. Detect platform + package manager
 # ---------------------------------------------------------------------------
@@ -128,4 +145,5 @@ nvim --headless \
   -c 'silent! TSInstallSync! python lua vim vimdoc bash json yaml toml markdown markdown_inline' \
   -c 'qa' >/dev/null 2>&1 || true
 
-printf '\033[1m%s\033[0m\n' "Done. Launch 'nvim'. Press <Space>k for the keymap cheatsheet."
+printf '\033[1m%s\033[0m\n' "Done. Launch 'nvim'."
+play_anim

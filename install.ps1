@@ -23,6 +23,22 @@ function Have($cmd) { [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
 function Info($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Warn($msg) { Write-Host "!! $msg"  -ForegroundColor Yellow }
 
+# A tiny send-off animation. Disable with --no-anim (or $env:NVIM_NO_ANIM=1);
+# auto-skipped when output is redirected.
+$NoAnim = ($args -contains '--no-anim') -or [bool]$env:NVIM_NO_ANIM
+function Play-Anim {
+  if ($NoAnim) { return }
+  if ([Console]::IsOutputRedirected) { return }
+  $w = 44
+  Write-Host ""
+  for ($pos = 0; $pos -le $w; $pos += 2) {
+    Write-Host -NoNewline ("`r  " + ('.' * $pos) + "}==>")
+    Start-Sleep -Milliseconds 30
+  }
+  Write-Host -NoNewline ("`r" + (' ' * ($w + 8)) + "`r")
+  Write-Host "  *  blast off - nvim is ready!  (<Space>k for keys)" -ForegroundColor Green
+}
+
 # ---------------------------------------------------------------------------
 # 1. System dependencies via winget (preferred) or scoop
 # ---------------------------------------------------------------------------
@@ -81,4 +97,5 @@ nvim --headless "+qa"
 Info "Compiling Treesitter parsers (needs a C compiler; skipped silently if absent)…"
 nvim --headless -c "silent! TSInstallSync! python lua vim vimdoc bash json yaml toml markdown markdown_inline" -c "qa"
 
-Write-Host "Done. Launch 'nvim'. Press <Space>k for the keymap cheatsheet." -ForegroundColor Green
+Write-Host "Done. Launch 'nvim'." -ForegroundColor Green
+Play-Anim
