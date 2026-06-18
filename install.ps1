@@ -29,11 +29,17 @@ $NoAnim = ($args -contains '--no-anim') -or [bool]$env:NVIM_NO_ANIM
 function Play-Anim {
   if ($NoAnim) { return }
   if ([Console]::IsOutputRedirected) { return }
-  $w = 44
+  $ramp = @('⠁','⠂','⠄','⡀','⢀','⠠','⣀','⣄','⣤','⣦','⣶','⣷','⣿')  # faint -> dense
+  $n = $ramp.Count; $w = 48
   Write-Host ""
-  for ($pos = 0; $pos -le $w; $pos += 2) {
-    Write-Host -NoNewline ("`r  " + ('.' * $pos) + "}==>")
-    Start-Sleep -Milliseconds 30
+  for ($pos = 2; $pos -le $w; $pos += 2) {
+    $trail = ''
+    for ($j = 0; $j -lt $pos; $j++) {
+      $d = $pos - $j
+      if ($d -le $n) { $trail += $ramp[$n - $d] } else { $trail += ' ' }
+    }
+    Write-Host -NoNewline ("`r  $trail}=▶")
+    Start-Sleep -Milliseconds 8
   }
   Write-Host -NoNewline ("`r" + (' ' * ($w + 8)) + "`r")
   Write-Host "  *  blast off - nvim is ready!  (<Space>k for keys)" -ForegroundColor Green

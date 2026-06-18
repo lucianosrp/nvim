@@ -36,13 +36,20 @@ for a in "$@"; do [ "$a" = "--no-anim" ] && NO_ANIM=1; done
 play_anim() {
   [ "$NO_ANIM" = 1 ] && return 0
   [ -t 1 ] || return 0
-  local w=44 pos
+  # braille exhaust: dense at the engine, thinning out behind (faint -> dense)
+  local ramp=('⠁' '⠂' '⠄' '⡀' '⢀' '⠠' '⣀' '⣄' '⣤' '⣦' '⣶' '⣷' '⣿')
+  local n=${#ramp[@]} w=48 pos j d trail
   printf '\n'
-  for ((pos = 0; pos <= w; pos += 2)); do
-    printf '\r  %s}==>' "$(printf '%*s' "$pos" '' | tr ' ' '.')"
-    sleep 0.03 || true
+  for ((pos = 2; pos <= w; pos += 2)); do
+    trail=''
+    for ((j = 0; j < pos; j++)); do
+      d=$((pos - j))
+      if ((d <= n)); then trail+="${ramp[n - d]}"; else trail+=' '; fi
+    done
+    printf '\r  %s}=▶' "$trail"
+    sleep 0.008 || true
   done
-  printf '\r\033[K  \033[32m*\033[0m  blast off — nvim is ready!  \033[2m(<Space>k for keys)\033[0m\n\n'
+  printf '\r\033[K  \033[32m✦\033[0m  blast off — nvim is ready!  \033[2m(<Space>k for keys)\033[0m\n\n'
 }
 
 # ---------------------------------------------------------------------------
