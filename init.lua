@@ -208,6 +208,8 @@ map("n", "<leader>R", fzf_cmd("resume"), { desc = "Resume last picker" })
 map("n", "<leader>s", fzf_cmd("lsp_document_symbols"), { desc = "Document symbols" })
 map("n", "<leader>S", fzf_cmd("lsp_live_workspace_symbols"), { desc = "Workspace symbols" })
 map("n", "<leader>x", fzf_cmd("diagnostics_document"), { desc = "Document diagnostics" })
+map("n", "<leader>X", fzf_cmd("diagnostics_workspace"), { desc = "Workspace diagnostics" })
+map("n", "<leader>gs", fzf_cmd("git_status"), { desc = "Git status (changed files)" })
 map("n", "<leader>?", fzf_cmd("helptags"), { desc = "Help tags" })
 map("n", "<leader>k", fzf_cmd("keymaps"), { desc = "Keymaps cheatsheet" })
 -- Colorscheme picker, minus base16-nvim's ~100 bundled `base16-*` schemes
