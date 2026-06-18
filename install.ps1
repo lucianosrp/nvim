@@ -29,20 +29,37 @@ $NoAnim = ($args -contains '--no-anim') -or [bool]$env:NVIM_NO_ANIM
 function Play-Anim {
   if ($NoAnim) { return }
   if ([Console]::IsOutputRedirected) { return }
-  $ramp = @('⠁','⠂','⠄','⡀','⢀','⠠','⣀','⣄','⣤','⣦','⣶','⣷','⣿')  # faint -> dense
-  $n = $ramp.Count; $w = 48
+  $e = [char]27
+  $smoke = @('⠁','⠂','⠄','⡀','⢀','⠠','⣀','⣄','⣤','⣦','⣶','⣷','⣿'); $ns = 13
+  $stch = @('✦','✧','⋆','·','✫'); $stcol = @('93','96','97','95','94')
+  $w = 52; $frame = 0
   Write-Host ""
-  for ($pos = 2; $pos -le $w; $pos += 2) {
-    $trail = ''
-    for ($j = 0; $j -lt $pos; $j++) {
-      $d = $pos - $j
-      if ($d -le $n) { $trail += $ramp[$n - $d] } else { $trail += ' ' }
+  for ($pos = 3; $pos -le $w; $pos += 2) {
+    $line = ''
+    for ($col = 0; $col -lt $w; $col++) {
+      if ($col -eq $pos) { $line += "$e[1;96m▶$e[0m" }
+      elseif ($col -eq $pos - 1) { $line += "$e[1;97m=$e[0m" }
+      elseif ($col -eq $pos - 2) { $line += "$e[1;93m}$e[0m" }
+      elseif ($col -lt $pos - 2) {
+        $d = $pos - 2 - $col
+        if ($d -le $ns) {
+          $ch = $smoke[$ns - $d]
+          if     ($d -le 2) { $c = '93' } elseif ($d -le 4) { $c = '33' }
+          elseif ($d -le 6) { $c = '91' } elseif ($d -le 9) { $c = '90' } else { $c = '2;90' }
+          $line += "$e[${c}m$ch$e[0m"
+        } else { $line += ' ' }
+      }
+      elseif ((($col * 7 + 3) % 11) -eq 0) {
+        $k = ($frame + $col) % 5
+        $line += "$e[$($stcol[$k])m$($stch[$k])$e[0m"
+      } else { $line += ' ' }
     }
-    Write-Host -NoNewline ("`r  $trail}=▶")
-    Start-Sleep -Milliseconds 8
+    Write-Host -NoNewline ("`r  $line")
+    $frame++
+    Start-Sleep -Milliseconds 12
   }
   Write-Host -NoNewline ("`r" + (' ' * ($w + 8)) + "`r")
-  Write-Host "  *  blast off - nvim is ready!  (<Space>k for keys)" -ForegroundColor Green
+  Write-Host "  $e[93m✦$e[0m $e[96m✧$e[0m  blast off - nvim is ready!  (<Space>k for keys)  $e[95m⋆$e[0m"
 }
 
 # ---------------------------------------------------------------------------

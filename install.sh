@@ -36,20 +36,40 @@ for a in "$@"; do [ "$a" = "--no-anim" ] && NO_ANIM=1; done
 play_anim() {
   [ "$NO_ANIM" = 1 ] && return 0
   [ -t 1 ] || return 0
-  # braille exhaust: dense at the engine, thinning out behind (faint -> dense)
-  local ramp=('⠁' '⠂' '⠄' '⡀' '⢀' '⠠' '⣀' '⣄' '⣤' '⣦' '⣶' '⣷' '⣿')
-  local n=${#ramp[@]} w=48 pos j d trail
+  _anim_render   # shared with the demo / install
+}
+# Rocket + colored braille exhaust flying through a twinkling starfield.
+_anim_render() {
+  local R='\033[0m'
+  local smoke=('⠁' '⠂' '⠄' '⡀' '⢀' '⠠' '⣀' '⣄' '⣤' '⣦' '⣶' '⣷' '⣿') ns=13
+  local stch=('✦' '✧' '⋆' '·' '✫') stcol=('\033[93m' '\033[96m' '\033[97m' '\033[95m' '\033[94m')
+  local w=52 pos col d frame=0 line k
   printf '\n'
-  for ((pos = 2; pos <= w; pos += 2)); do
-    trail=''
-    for ((j = 0; j < pos; j++)); do
-      d=$((pos - j))
-      if ((d <= n)); then trail+="${ramp[n - d]}"; else trail+=' '; fi
+  for ((pos = 3; pos <= w; pos += 2)); do
+    line=''
+    for ((col = 0; col < w; col++)); do
+      if ((col == pos)); then line+="\033[1;96m▶${R}"            # nose
+      elif ((col == pos - 1)); then line+="\033[1;97m=${R}"       # body
+      elif ((col == pos - 2)); then line+="\033[1;93m}${R}"       # engine
+      elif ((col < pos - 2)); then
+        d=$((pos - 2 - col))
+        if ((d <= ns)); then
+          local ch="${smoke[ns - d]}"
+          if ((d <= 2)); then line+="\033[93m${ch}${R}"           # flame
+          elif ((d <= 4)); then line+="\033[33m${ch}${R}"         # orange
+          elif ((d <= 6)); then line+="\033[91m${ch}${R}"         # ember
+          elif ((d <= 9)); then line+="\033[90m${ch}${R}"         # smoke
+          else line+="\033[2;90m${ch}${R}"; fi                    # wisp
+        else line+=' '; fi
+      elif (((col * 7 + 3) % 11 == 0)); then                      # twinkling star ahead
+        k=$(((frame + col) % 5)); line+="${stcol[k]}${stch[k]}${R}"
+      else line+=' '; fi
     done
-    printf '\r  %s}=▶' "$trail"
-    sleep 0.008 || true
+    printf '\r  %b' "$line"
+    frame=$((frame + 1))
+    sleep 0.012 || true
   done
-  printf '\r\033[K  \033[32m✦\033[0m  blast off — nvim is ready!  \033[2m(<Space>k for keys)\033[0m\n\n'
+  printf '\r\033[K  \033[93m✦\033[0m \033[96m✧\033[0m \033[95m⋆\033[0m  \033[1;92mblast off — nvim is ready!\033[0m  \033[2m(<Space>k for keys)\033[0m  \033[95m⋆\033[0m \033[96m✧\033[0m \033[93m✦\033[0m\n\n'
 }
 
 # ---------------------------------------------------------------------------
