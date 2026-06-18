@@ -30,35 +30,36 @@ function Play-Anim {
   if ($NoAnim) { return }
   if ([Console]::IsOutputRedirected) { return }
   $e = [char]27
-  $smoke = @('⠁','⠂','⠄','⡀','⢀','⠠','⣀','⣄','⣤','⣦','⣶','⣷','⣿'); $ns = 13
+  $heavy = @('⣿','⣷','⣾','⣶','⣦','⣟','⣯','⣽')   # dense, near the engine
+  $mid   = @('⠿','⠷','⠾','⠶','⡶','⢾','⣀','⣄')   # billowing smoke
+  $light = @('⠁','⠂','⠄','⠈','⠐','⠠','⡀','⢀')   # dissipating wisps
+  $flame = @('93','33','91')                       # flicker: yellow/orange/red
   $stch = @('✦','✧','⋆','·','✫'); $stcol = @('93','96','97','95','94')
-  $w = 52; $frame = 0
+  $w = 54; $frame = 0
   Write-Host ""
   for ($pos = 3; $pos -le $w; $pos += 2) {
     $line = ''
     for ($col = 0; $col -lt $w; $col++) {
       if ($col -eq $pos) { $line += "$e[1;96m▶$e[0m" }
       elseif ($col -eq $pos - 1) { $line += "$e[1;97m=$e[0m" }
-      elseif ($col -eq $pos - 2) { $line += "$e[1;93m}$e[0m" }
+      elseif ($col -eq $pos - 2) { $line += "$e[$($flame[(Get-Random -Max 3)])m}$e[0m" }
       elseif ($col -lt $pos - 2) {
-        $d = $pos - 2 - $col
-        if ($d -le $ns) {
-          $ch = $smoke[$ns - $d]
-          if     ($d -le 2) { $c = '93' } elseif ($d -le 4) { $c = '33' }
-          elseif ($d -le 6) { $c = '91' } elseif ($d -le 9) { $c = '90' } else { $c = '2;90' }
-          $line += "$e[${c}m$ch$e[0m"
-        } else { $line += ' ' }
+        $d = $pos - 2 - $col; $r = Get-Random -Maximum 100
+        if ($d -le 3) { $line += "$e[$($flame[(Get-Random -Max 3)])m$($heavy[(Get-Random -Max 8)])$e[0m" }
+        elseif ($d -le 7)  { if ($r -lt 22) { $line += ' ' } else { $line += "$e[90m$($mid[(Get-Random -Max 8)])$e[0m" } }
+        elseif ($d -le 13) { if ($r -lt 58) { $line += ' ' } else { $line += "$e[2;90m$($light[(Get-Random -Max 8)])$e[0m" } }
+        else { $line += ' ' }
       }
-      elseif ((($col * 7 + 3) % 11) -eq 0) {
-        $k = ($frame + $col) % 5
-        $line += "$e[$($stcol[$k])m$($stch[$k])$e[0m"
+      elseif ((($col * 5 + $frame) % 9) -eq 0) {
+        $r = Get-Random -Maximum 5
+        $line += "$e[$($stcol[$r])m$($stch[$r])$e[0m"
       } else { $line += ' ' }
     }
-    Write-Host -NoNewline ("`r  $line")
+    Write-Host -NoNewline ("`r$e[K  $line")
     $frame++
-    Start-Sleep -Milliseconds 12
+    Start-Sleep -Milliseconds 18
   }
-  Write-Host -NoNewline ("`r" + (' ' * ($w + 8)) + "`r")
+  Write-Host -NoNewline ("`r$e[K")
   Write-Host "  $e[93m✦$e[0m $e[96m✧$e[0m  blast off - nvim is ready!  (<Space>k for keys)  $e[95m⋆$e[0m"
 }
 

@@ -38,36 +38,37 @@ play_anim() {
   [ -t 1 ] || return 0
   _anim_render   # shared with the demo / install
 }
-# Rocket + colored braille exhaust flying through a twinkling starfield.
+# Rocket flying through a starfield, with a CHURNING exhaust — the braille puffs,
+# colors, and gaps are re-rolled every frame (via $RANDOM) so it billows instead
+# of sliding as a rigid bar.
 _anim_render() {
   local R='\033[0m'
-  local smoke=('⠁' '⠂' '⠄' '⡀' '⢀' '⠠' '⣀' '⣄' '⣤' '⣦' '⣶' '⣷' '⣿') ns=13
+  local heavy=('⣿' '⣷' '⣾' '⣶' '⣦' '⣟' '⣯' '⣽')   # dense, near the engine
+  local mid=('⠿' '⠷' '⠾' '⠶' '⡶' '⢾' '⣀' '⣄')      # billowing smoke
+  local light=('⠁' '⠂' '⠄' '⠈' '⠐' '⠠' '⡀' '⢀')   # dissipating wisps
+  local flame=('\033[93m' '\033[33m' '\033[91m')     # flicker: yellow/orange/red
   local stch=('✦' '✧' '⋆' '·' '✫') stcol=('\033[93m' '\033[96m' '\033[97m' '\033[95m' '\033[94m')
-  local w=52 pos col d frame=0 line k
+  local w=54 pos col d frame=0 line r
   printf '\n'
   for ((pos = 3; pos <= w; pos += 2)); do
     line=''
     for ((col = 0; col < w; col++)); do
-      if ((col == pos)); then line+="\033[1;96m▶${R}"            # nose
-      elif ((col == pos - 1)); then line+="\033[1;97m=${R}"       # body
-      elif ((col == pos - 2)); then line+="\033[1;93m}${R}"       # engine
+      if ((col == pos)); then line+="\033[1;96m▶${R}"                         # nose
+      elif ((col == pos - 1)); then line+="\033[1;97m=${R}"                    # body
+      elif ((col == pos - 2)); then line+="${flame[RANDOM % 3]}}${R}"          # flickering engine
       elif ((col < pos - 2)); then
-        d=$((pos - 2 - col))
-        if ((d <= ns)); then
-          local ch="${smoke[ns - d]}"
-          if ((d <= 2)); then line+="\033[93m${ch}${R}"           # flame
-          elif ((d <= 4)); then line+="\033[33m${ch}${R}"         # orange
-          elif ((d <= 6)); then line+="\033[91m${ch}${R}"         # ember
-          elif ((d <= 9)); then line+="\033[90m${ch}${R}"         # smoke
-          else line+="\033[2;90m${ch}${R}"; fi                    # wisp
+        d=$((pos - 2 - col)); r=$((RANDOM % 100))
+        if ((d <= 3)); then line+="${flame[RANDOM % 3]}${heavy[RANDOM % 8]}${R}"          # flame core
+        elif ((d <= 7)); then ((r < 22)) && line+=' ' || line+="\033[90m${mid[RANDOM % 8]}${R}"    # churning smoke + gaps
+        elif ((d <= 13)); then ((r < 58)) && line+=' ' || line+="\033[2;90m${light[RANDOM % 8]}${R}" # patchy wisps
         else line+=' '; fi
-      elif (((col * 7 + 3) % 11 == 0)); then                      # twinkling star ahead
-        k=$(((frame + col) % 5)); line+="${stcol[k]}${stch[k]}${R}"
+      elif (((col * 5 + frame) % 9 == 0)); then                                # drifting, twinkling stars
+        r=$((RANDOM % 5)); line+="${stcol[r]}${stch[r]}${R}"
       else line+=' '; fi
     done
-    printf '\r  %b' "$line"
+    printf '\r\033[K  %b' "$line"
     frame=$((frame + 1))
-    sleep 0.012 || true
+    sleep 0.018 || true
   done
   printf '\r\033[K  \033[93m✦\033[0m \033[96m✧\033[0m \033[95m⋆\033[0m  \033[1;92mblast off — nvim is ready!\033[0m  \033[2m(<Space>k for keys)\033[0m  \033[95m⋆\033[0m \033[96m✧\033[0m \033[93m✦\033[0m\n\n'
 }
