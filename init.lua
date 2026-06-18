@@ -210,7 +210,13 @@ map("n", "<leader>S", fzf_cmd("lsp_live_workspace_symbols"), { desc = "Workspace
 map("n", "<leader>x", fzf_cmd("diagnostics_document"), { desc = "Document diagnostics" })
 map("n", "<leader>?", fzf_cmd("helptags"), { desc = "Help tags" })
 map("n", "<leader>k", fzf_cmd("keymaps"), { desc = "Keymaps cheatsheet" })
-map("n", "<leader>uc", fzf_cmd("colorschemes"), { desc = "Colorschemes" })
+-- Colorscheme picker, minus base16-nvim's ~100 bundled `base16-*` schemes
+-- (they're just the engine for `dank`; listing them is noise and they error
+-- when the base16 module isn't loaded). Keeps fzf-lua's live preview.
+map("n", "<leader>uc", function()
+  local f = load_fzf()
+  if f then f.colorschemes({ ignore_patterns = { "^base16" } }) end
+end, { desc = "Colorschemes" })
 
 -- Gitsigns — added / changed / removed line markers + hunk navigation.
 local ok_gs, gitsigns = pcall(require, "gitsigns")
