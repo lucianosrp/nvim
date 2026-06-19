@@ -178,14 +178,24 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Pre-install plugins + compile parsers so the first real launch is instant
+# 6. Pre-install plugins + compile parsers so the first real launch is instant.
+#    Idempotent: only compiles parsers that are MISSING, so re-running (an
+#    update) skips the slow ~1-2 min compile entirely.
 # ---------------------------------------------------------------------------
 info "Installing plugins (vim.pack)…"
 nvim --headless "+qa" >/dev/null 2>&1 || true
-info "Compiling Treesitter parsers (needs a C compiler, ~1-2 min)…"
-nvim --headless \
-  -c 'silent! TSInstallSync! python lua vim vimdoc bash json yaml toml markdown markdown_inline' \
-  -c 'qa' >/dev/null 2>&1 || true
+
+PARSER_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/site/pack/core/opt/nvim-treesitter/parser"
+MISSING=""
+for p in python lua vim vimdoc bash json yaml toml markdown markdown_inline; do
+  [ -f "$PARSER_DIR/$p.so" ] || MISSING="$MISSING $p"
+done
+if [ -n "$MISSING" ]; then
+  info "Compiling Treesitter parsers (needs a C compiler):$MISSING"
+  nvim --headless -c "silent! TSInstallSync$MISSING" -c 'qa' >/dev/null 2>&1 || true
+else
+  info "Treesitter parsers already compiled — skipping."
+fi
 
 printf '\033[1m%s\033[0m\n' "Done. Launch 'nvim'."
 play_anim
