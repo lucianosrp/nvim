@@ -92,6 +92,7 @@ of every mapping.
 | `<leader>/` | Live grep |
 | `<leader>*` | Grep word under cursor |
 | `<leader>b` / `<leader>o` | Buffers / recent files |
+| `<leader>q` | Close buffer (keeps the window/split) |
 | `<leader>s` / `<leader>S` | Document / workspace symbols |
 | `<leader>x` / `<leader>X` | Document / workspace diagnostics |
 | `<leader>R` | Resume last picker |
