@@ -68,7 +68,10 @@ Uses `winget` (or `scoop`). Treesitter parser compilation needs a C compiler on
 `PATH` (zig or MSVC Build Tools); without one, syntax still works.
 
 **Updating:** re-run the installer, or `git -C ~/.config/nvim pull`. Re-runs are
-safe — the installer **stashes any local edits, pulls, then re-applies them**
+**fast and idempotent** — system packages use `--needed`, and Treesitter only
+compiles parsers that are *missing* (so an update that adds no parsers skips the
+slow compile). Re-runs are also safe: the installer **stashes any local edits,
+pulls, then re-applies them**
 (worst case they're kept in `git stash`). Your **colorscheme also survives
 updates**: the active scheme is remembered in the state dir (outside git), so
 picking one with `<leader>uc` (or `:colorscheme`) sticks across restarts *and*

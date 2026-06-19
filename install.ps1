@@ -130,8 +130,18 @@ if (Test-Path (Join-Path $ConfigDir ".git")) {
 # ---------------------------------------------------------------------------
 Info "Installing plugins (vim.pack)…"
 nvim --headless "+qa"
-Info "Compiling Treesitter parsers (needs a C compiler; skipped silently if absent)…"
-nvim --headless -c "silent! TSInstallSync! python lua vim vimdoc bash json yaml toml markdown markdown_inline" -c "qa"
+
+# Idempotent: only compile parsers that are MISSING, so updates skip the slow compile.
+$dataHome = if ($env:XDG_DATA_HOME) { $env:XDG_DATA_HOME } else { Join-Path $env:LOCALAPPDATA "nvim-data" }
+$parserDir = Join-Path $dataHome "site\pack\core\opt\nvim-treesitter\parser"
+$want = @("python","lua","vim","vimdoc","bash","json","yaml","toml","markdown","markdown_inline")
+$missing = $want | Where-Object { -not (Test-Path (Join-Path $parserDir "$_.so")) }
+if ($missing.Count -gt 0) {
+  Info ("Compiling Treesitter parsers (needs a C compiler): " + ($missing -join " "))
+  nvim --headless -c ("silent! TSInstallSync " + ($missing -join " ")) -c "qa"
+} else {
+  Info "Treesitter parsers already compiled — skipping."
+}
 
 Write-Host "Done. Launch 'nvim'." -ForegroundColor Green
 Play-Anim
