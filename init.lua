@@ -803,6 +803,24 @@ vim.api.nvim_create_autocmd("BufWritePre", {
 -- General keymaps
 -- ---------------------------------------------------------------------------
 map("n", "<leader>w", "<cmd>write<cr>", { desc = "Save" })
+-- Close the current buffer but KEEP the window/split (plain :bd closes the
+-- split — or quits nvim — on your last buffer). Refuses if there are unsaved
+-- changes (:w first, or :bd! to force).
+map("n", "<leader>q", function()
+  local cur = vim.api.nvim_get_current_buf()
+  if vim.bo[cur].modified then
+    vim.notify("Unsaved changes — :w first, or :bd! to force", vim.log.levels.WARN)
+    return
+  end
+  local alt = vim.fn.bufnr("#")
+  if alt > 0 and alt ~= cur and vim.fn.buflisted(alt) == 1 then
+    vim.cmd.buffer("#")
+  else
+    vim.cmd.bprevious()
+  end
+  if vim.api.nvim_get_current_buf() == cur then vim.cmd.enew() end -- was the only buffer
+  pcall(vim.cmd.bdelete, cur)
+end, { desc = "Close buffer (keep window)" })
 map("n", "<leader>e", "<cmd>Explore<cr>", { desc = "Explore (netrw)" })
 -- cd to the current file's directory (so fzf-lua pickers follow you there)
 map("n", "<leader>cd", function()
