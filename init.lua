@@ -837,6 +837,21 @@ vim.api.nvim_create_autocmd("FileChangedShellPost", {
   end,
 })
 
+-- Keep an OPEN Diffview's file panel live: refresh it when the working tree
+-- changes — your saves, or files an agent rewrote on disk (which the auto-reload
+-- above pulls in). Cheap no-op unless diffview is loaded with a view open.
+local function refresh_diffview()
+  if not package.loaded["diffview"] then return end
+  local ok, lib = pcall(require, "diffview.lib")
+  if ok and lib.get_current_view and lib.get_current_view() then
+    pcall(vim.cmd, "DiffviewRefresh")
+  end
+end
+vim.api.nvim_create_autocmd({ "BufWritePost", "FileChangedShellPost", "FocusGained" }, {
+  group = aug,
+  callback = function() vim.schedule(refresh_diffview) end,
+})
+
 -- :DiffOrig — diff the current buffer against its on-disk version (what an agent
 -- changed vs what you have). Built-in diff mode, no plugin. :diffoff! to exit.
 vim.api.nvim_create_user_command("DiffOrig", function()
