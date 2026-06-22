@@ -104,6 +104,26 @@ vim.diagnostic.config({
 })
 
 -- ---------------------------------------------------------------------------
+-- Minimal statusline (native, no plugin): relative path + modified/RO flags,
+-- diagnostics counts (only when present), and line:col. Evaluated by `%!` so
+-- it updates live. Kept deliberately small.
+-- ---------------------------------------------------------------------------
+function _G.statusline()
+  local rel = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":.")
+  if rel == "" then rel = "[No Name]" end
+  local flags = ""
+  if vim.bo.modified then flags = flags .. " [+]" end
+  if vim.bo.readonly or not vim.bo.modifiable then flags = flags .. " [RO]" end
+  local d = vim.diagnostic.count(0)
+  local diag = ""
+  if (d[vim.diagnostic.severity.ERROR] or 0) > 0 then diag = diag .. " E" .. d[vim.diagnostic.severity.ERROR] end
+  if (d[vim.diagnostic.severity.WARN] or 0) > 0 then diag = diag .. " W" .. d[vim.diagnostic.severity.WARN] end
+  -- %< truncate-from-here, %= left/right split, %l:%c line:col
+  return "%<" .. rel .. flags .. "%=" .. diag .. "  %l:%c "
+end
+vim.o.statusline = "%!v:lua.statusline()"
+
+-- ---------------------------------------------------------------------------
 -- Plugins (built-in package manager — no lazy.nvim / no distro)
 -- ---------------------------------------------------------------------------
 -- Set false if your terminal lacks a Nerd Font: skips devicons + file icons

@@ -165,6 +165,8 @@ and **inline per-line comments**; `<leader>gt` hides/re-shows it.
 - **Hot-reload, including external edits.** Saving `init.lua` *or* having another
   process rewrite it re-sources the config live (libuv `fs_event` watcher) — no
   restart.
+- **Minimal statusline** (native, no plugin): relative file path, `[+]`/`[RO]`
+  flags, diagnostic counts (only when present), and `line:col`.
 
 ---
 
