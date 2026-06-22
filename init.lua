@@ -965,6 +965,18 @@ end, { desc = "cd to current file's dir" })
 map("n", "<Esc>", "<cmd>nohlsearch<cr>", { desc = "Clear search highlight" })
 map("n", "<C-h>", "<C-w>h"); map("n", "<C-j>", "<C-w>j")
 map("n", "<C-k>", "<C-w>k"); map("n", "<C-l>", "<C-w>l")
+-- Zoom the current window fullscreen and back (<leader><Esc>). Opens the window
+-- in a throwaway tab, so toggling off restores the underlying split layout
+-- exactly. Works in any window, including diffview panes. vim.t.zoomed tags it.
+local function toggle_zoom()
+  if vim.t.zoomed then
+    vim.cmd("tabclose")
+  elseif vim.fn.winnr("$") > 1 then
+    vim.cmd("tab split")
+    vim.t.zoomed = true
+  end
+end
+map("n", "<leader><Esc>", toggle_zoom, { desc = "Zoom window fullscreen (toggle)" })
 
 -- ---------------------------------------------------------------------------
 -- Auto-reload files changed on disk (Claude agents / remote tools editing
