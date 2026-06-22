@@ -346,12 +346,19 @@ end
 local function open_review(root, branch, base)
   local function run(c) return vim.system(c, { cwd = root, text = true }):wait() end
   vim.notify("Fetching " .. branch .. " …", vim.log.levels.INFO)
-  if run({ "git", "fetch", "origin", branch }).code ~= 0 then
-    vim.notify("git fetch failed for " .. branch, vim.log.levels.ERROR)
+  -- Fetch branch + base, writing real remote-tracking refs. A bare
+  -- `git fetch origin <branch>` only updates FETCH_HEAD, so origin/<branch>
+  -- won't exist for a freshly-pushed branch and the worktree add (+ merge-base)
+  -- below would fail with "invalid reference". Explicit refspecs fix that;
+  -- --force in case a tracking ref needs to rewind (force-pushed branch).
+  local fr = run({ "git", "fetch", "--force", "origin",
+    branch .. ":refs/remotes/origin/" .. branch,
+    base .. ":refs/remotes/origin/" .. base })
+  if fr.code ~= 0 then
+    vim.notify("git fetch failed:\n" .. (fr.stderr or ""), vim.log.levels.ERROR)
     return false
   end
-  run({ "git", "fetch", "origin", base }) -- make the base ref current
-  cleanup_review()                         -- tear down any previous review
+  cleanup_review() -- tear down any previous review
   local wt = vim.fs.joinpath(vim.fn.stdpath("cache"), "pr-review",
     vim.fs.basename(root), (branch:gsub("[^%w._-]", "-")))
   vim.fn.mkdir(vim.fs.dirname(wt), "p")
