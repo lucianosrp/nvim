@@ -133,6 +133,7 @@ of every mapping.
 | `<leader>gr` | **Review a branch/PR** in a throwaway worktree (pure git, tokenless) |
 | `<leader>gP` | **Forge PR review** — list open PRs (GitHub/Bitbucket) with status, pick one → worktree + panel |
 | `<leader>gt` | Toggle the PR panel (description / status / comments / inline comments) |
+| `<leader>gi` | Toggle inline PR comments rendered on the diff lines |
 | `<leader>gR` | Finish review (remove the worktree) |
 
 Inside diffview: `<Tab>`/`<S-Tab>` next/prev file, `gf` jump to real file, `g?` help.
@@ -140,7 +141,10 @@ Inside diffview: `<Tab>`/`<S-Tab>` next/prev file, `gf` jump to real file, `g?` 
 **`<leader>gP`** detects the forge from `origin`: GitHub via the `gh` CLI,
 Bitbucket via its REST API (set `BITBUCKET_USER` + `BITBUCKET_TOKEN`). The panel
 shows the PR **description, status** (draft / merged / approved / CI), **comments**,
-and **inline per-line comments**; `<leader>gt` hides/re-shows it.
+and **inline per-line comments**; `<leader>gt` hides/re-shows it. Inline comments
+are *also rendered right on the diff* — as virtual lines under the commented line
+of the new file (with a `▌` gutter mark), so you read each one in context as you
+scroll. `<leader>gi` toggles them off/on.
 
 ---
 

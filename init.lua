@@ -317,6 +317,7 @@ local function cleanup_review()
   local r = _G.__pr_review
   if not r then return end
   _G.__pr_review = nil
+  _G.__pr_inline = nil -- drop annotations (the worktree buffers are wiped below)
   -- wipe buffers living inside the worktree (they'd dangle once it's gone)
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
     local n = vim.api.nvim_buf_get_name(b)
@@ -345,12 +346,19 @@ end
 local function open_review(root, branch, base)
   local function run(c) return vim.system(c, { cwd = root, text = true }):wait() end
   vim.notify("Fetching " .. branch .. " …", vim.log.levels.INFO)
-  if run({ "git", "fetch", "origin", branch }).code ~= 0 then
-    vim.notify("git fetch failed for " .. branch, vim.log.levels.ERROR)
+  -- Fetch branch + base, writing real remote-tracking refs. A bare
+  -- `git fetch origin <branch>` only updates FETCH_HEAD, so origin/<branch>
+  -- won't exist for a freshly-pushed branch and the worktree add (+ merge-base)
+  -- below would fail with "invalid reference". Explicit refspecs fix that;
+  -- --force in case a tracking ref needs to rewind (force-pushed branch).
+  local fr = run({ "git", "fetch", "--force", "origin",
+    branch .. ":refs/remotes/origin/" .. branch,
+    base .. ":refs/remotes/origin/" .. base })
+  if fr.code ~= 0 then
+    vim.notify("git fetch failed:\n" .. (fr.stderr or ""), vim.log.levels.ERROR)
     return false
   end
-  run({ "git", "fetch", "origin", base }) -- make the base ref current
-  cleanup_review()                         -- tear down any previous review
+  cleanup_review() -- tear down any previous review
   local wt = vim.fs.joinpath(vim.fn.stdpath("cache"), "pr-review",
     vim.fs.basename(root), (branch:gsub("[^%w._-]", "-")))
   vim.fn.mkdir(vim.fs.dirname(wt), "p")
@@ -361,7 +369,15 @@ local function open_review(root, branch, base)
   end
   _G.__pr_review = { wt = wt, root = root, prev = vim.fn.getcwd() }
   vim.cmd.tcd(wt) -- review inside the worktree; diffview targets it
-  if load_diffview() then vim.cmd("DiffviewOpen origin/" .. base .. "...HEAD") end
+  -- Diff merge-base(base, branch) vs the worktree's working tree. The worktree
+  -- is detached at origin/branch (clean), so this equals the 3-dot PR diff — but
+  -- the RIGHT pane is now the real on-disk file (not a diffview:// buffer), which
+  -- is what lets inline comments anchor to the right buffer + new-file line.
+  local mb = vim.trim((vim.system({ "git", "-C", root, "merge-base",
+    "origin/" .. base, "origin/" .. branch }, { text = true }):wait().stdout) or "")
+  if load_diffview() then
+    vim.cmd("DiffviewOpen " .. (mb ~= "" and mb or ("origin/" .. base .. "...HEAD")))
+  end
   return true
 end
 
@@ -457,6 +473,84 @@ local function body_or_none(s)
   return (s and s ~= "") and s or "_(none)_"
 end
 
+-- Inline (per-line) comments. Fetchers return a flat list of
+--   { path, line, new_line, who, body }
+-- where `line` is for the panel listing and `new_line` is the RIGHT-side
+-- (new-file) line used to anchor the annotation on the diff — nil when the
+-- comment sits on a removed line (those stay in the panel only).
+local function inline_section(L, inline)
+  if not (inline and #inline > 0) then return end
+  L[#L + 1] = ""
+  L[#L + 1] = "## Inline comments"
+  for _, c in ipairs(inline) do
+    L[#L + 1] = ("`%s:%s` **%s:**"):format(c.path or "?", tostring(c.line or "?"), c.who)
+    for _, ln in ipairs(vim.split(c.body, "\n")) do L[#L + 1] = "> " .. ln end
+  end
+end
+
+-- Render inline comments ON the diff: virtual lines (+ a gutter sign) under the
+-- commented line of diffview's RIGHT pane (the real worktree file). Annotation
+-- state lives in _G so it survives config hot-reload; cleanup_review clears it.
+local pr_inline_ns = vim.api.nvim_create_namespace("pr_inline_comments")
+
+local function annotate_buf(buf)
+  local r, by_path = _G.__pr_review, _G.__pr_inline
+  if not (r and by_path) or _G.__pr_inline_hidden then return end
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  local name = vim.api.nvim_buf_get_name(buf)
+  -- only the real worktree files (right/new pane); skip diffview:// & others
+  if name == "" or name:sub(1, #r.wt + 1) ~= (r.wt .. "/") then return end
+  local cs = by_path[name:sub(#r.wt + 2)]
+  if not cs then return end
+  vim.api.nvim_buf_clear_namespace(buf, pr_inline_ns, 0, -1)
+  local n = vim.api.nvim_buf_line_count(buf)
+  for _, c in ipairs(cs) do
+    local vlines = { { { "  💬 " .. c.who, "DiagnosticInfo" } } }
+    for _, ln in ipairs(vim.split(c.body, "\n")) do
+      vlines[#vlines + 1] = { { "  " .. ln, "Comment" } }
+    end
+    pcall(vim.api.nvim_buf_set_extmark, buf, pr_inline_ns, math.max(0, math.min(c.line, n) - 1), 0, {
+      virt_lines = vlines, sign_text = "▌", sign_hl_group = "DiagnosticInfo",
+    })
+  end
+end
+
+local function place_inline(inline)
+  local by_path = {}
+  for _, c in ipairs(inline or {}) do
+    if c.path and c.new_line then
+      by_path[c.path] = by_path[c.path] or {}
+      table.insert(by_path[c.path], { line = c.new_line, who = c.who, body = c.body })
+    end
+  end
+  _G.__pr_inline = next(by_path) and by_path or nil
+  _G.__pr_inline_hidden = false
+  for _, b in ipairs(vim.api.nvim_list_bufs()) do annotate_buf(b) end
+end
+
+-- diffview opens each file's diff buffer lazily as you navigate its file panel;
+-- re-annotate whenever a buffer is shown. Cheap: annotate_buf bails immediately
+-- unless a review is active and the buffer is a worktree file with comments.
+vim.api.nvim_create_autocmd({ "BufWinEnter", "BufReadPost" }, {
+  group = vim.api.nvim_create_augroup("pr-inline-comments", { clear = true }),
+  callback = function(ev) annotate_buf(ev.buf) end,
+})
+
+local function toggle_inline()
+  if not _G.__pr_inline then
+    vim.notify("No inline comments — open a PR with <leader>gP", vim.log.levels.INFO)
+    return
+  end
+  _G.__pr_inline_hidden = not _G.__pr_inline_hidden
+  for _, b in ipairs(vim.api.nvim_list_bufs()) do
+    if _G.__pr_inline_hidden then
+      pcall(vim.api.nvim_buf_clear_namespace, b, pr_inline_ns, 0, -1)
+    else
+      annotate_buf(b)
+    end
+  end
+end
+
 -- GitHub (gh)
 local function gh_prs(root)
   local d = sysjson({ "gh", "pr", "list", "--limit", "40", "--json",
@@ -477,7 +571,24 @@ local function gh_prs(root)
   return items
 end
 
-local function gh_panel_lines(root, num)
+-- structured inline comments (GitHub review comments). new_line = RIGHT-side
+-- line; nil for LEFT-side/outdated comments (panel-only, no diff anchor).
+local function gh_inline(root, num)
+  local d = sysjson({ "gh", "api", ("repos/{owner}/{repo}/pulls/%d/comments"):format(num) }, root)
+  local out = {}
+  for _, c in ipairs(d or {}) do
+    out[#out + 1] = {
+      path = c.path,
+      line = c.line or c.original_line,
+      new_line = (c.side ~= "LEFT") and c.line or nil,
+      who = "@" .. ((c.user or {}).login or "?"),
+      body = c.body or "",
+    }
+  end
+  return out
+end
+
+local function gh_panel_lines(root, num, inline)
   local d = sysjson({ "gh", "pr", "view", tostring(num), "--json",
     "number,title,author,body,state,isDraft,reviewDecision,statusCheckRollup,comments,baseRefName,headRefName" }, root)
   if not d then return { "# Failed to load PR #" .. num } end
@@ -495,14 +606,7 @@ local function gh_panel_lines(root, num)
       for _, ln in ipairs(vim.split(c.body or "", "\n")) do L[#L + 1] = "> " .. ln end
     end
   end
-  local inl = sysjson({ "gh", "api", ("repos/{owner}/{repo}/pulls/%d/comments"):format(num) }, root)
-  if inl and #inl > 0 then
-    L[#L + 1] = ""; L[#L + 1] = "## Inline comments"
-    for _, c in ipairs(inl) do
-      L[#L + 1] = ("`%s:%s` **@%s:**"):format(c.path, tostring(c.line or c.original_line or "?"), (c.user or {}).login or "?")
-      for _, ln in ipairs(vim.split(c.body or "", "\n")) do L[#L + 1] = "> " .. ln end
-    end
-  end
+  inline_section(L, inline)
   return L
 end
 
@@ -549,12 +653,18 @@ local function bb_panel_lines(ws, repo, id)
     "", "## Description",
   }
   for _, ln in ipairs(vim.split(body_or_none((d.summary or {}).raw), "\n")) do L[#L + 1] = ln end
+  -- one /comments fetch feeds both the panel and the on-diff annotations.
   local cm = bb_curl(base .. "/comments", "pagelen=50&fields=values.content.raw,values.user.display_name,values.inline.path,values.inline.to,values.inline.from")
   local general, inline = {}, {}
   for _, c in ipairs((cm or {}).values or {}) do
     local body, who = (c.content or {}).raw or "", (c.user or {}).display_name or "?"
     if c.inline then
-      inline[#inline + 1] = { path = c.inline.path, line = c.inline.to or c.inline.from, who = who, body = body }
+      inline[#inline + 1] = {
+        path = c.inline.path,
+        line = c.inline.to or c.inline.from,
+        new_line = c.inline.to, -- nil when the comment is on a removed line
+        who = who, body = body,
+      }
     else
       general[#general + 1] = { who = who, body = body }
     end
@@ -566,14 +676,8 @@ local function bb_panel_lines(ws, repo, id)
       for _, ln in ipairs(vim.split(c.body, "\n")) do L[#L + 1] = "> " .. ln end
     end
   end
-  if #inline > 0 then
-    L[#L + 1] = ""; L[#L + 1] = "## Inline comments"
-    for _, c in ipairs(inline) do
-      L[#L + 1] = ("`%s:%s` **%s:**"):format(c.path or "?", tostring(c.line or "?"), c.who)
-      for _, ln in ipairs(vim.split(c.body, "\n")) do L[#L + 1] = "> " .. ln end
-    end
-  end
-  return L
+  inline_section(L, inline)
+  return L, inline
 end
 
 local function review_pr()
@@ -611,8 +715,16 @@ local function review_pr()
         local it = sel and sel[1] and lookup[sel[1]]
         if not it then return end
         if open_review(root, it.branch, it.base) then
-          pr_panel((forge == "github") and gh_panel_lines(root, it.id) or bb_panel_lines(ws, repo, it.id))
-          vim.notify("PR #" .. it.id .. " — <leader>gR when done", vim.log.levels.INFO)
+          local panel, inline
+          if forge == "github" then
+            inline = gh_inline(root, it.id)
+            panel = gh_panel_lines(root, it.id, inline)
+          else
+            panel, inline = bb_panel_lines(ws, repo, it.id)
+          end
+          pr_panel(panel)
+          place_inline(inline)
+          vim.notify("PR #" .. it.id .. " — <leader>gi toggles inline · <leader>gR when done", vim.log.levels.INFO)
         end
       end,
     },
@@ -622,6 +734,7 @@ end
 map("n", "<leader>gr", review_branch, { desc = "Review a branch/PR (worktree)" })
 map("n", "<leader>gP", review_pr, { desc = "Review a forge PR (worktree + panel)" })
 map("n", "<leader>gt", toggle_pr_panel, { desc = "Toggle PR panel" })
+map("n", "<leader>gi", toggle_inline, { desc = "Toggle inline PR comments on diff" })
 map("n", "<leader>gR", cleanup_review, { desc = "Finish PR review (remove worktree)" })
 
 -- ---------------------------------------------------------------------------
