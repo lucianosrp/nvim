@@ -945,6 +945,13 @@ local function transparent()
     hl.bg, hl.ctermbg = nil, nil
     vim.api.nvim_set_hl(0, g, hl)
   end
+  -- Statusline text must stay readable once its background is stripped: some
+  -- schemes (e.g. dank) give the active StatusLine a dark fg meant for a light
+  -- bar, which vanishes on the transparent (dark) terminal. Pin readable fgs.
+  local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
+  local comment = vim.api.nvim_get_hl(0, { name = "Comment", link = false })
+  vim.api.nvim_set_hl(0, "StatusLine", { fg = normal.fg, bold = true })
+  vim.api.nvim_set_hl(0, "StatusLineNC", { fg = comment.fg or normal.fg })
 end
 
 vim.api.nvim_create_autocmd("ColorScheme", { group = aug, callback = transparent })
