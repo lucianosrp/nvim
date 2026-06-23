@@ -105,6 +105,8 @@ of every mapping.
 | `<leader>v` | Pick a Python virtualenv |
 | `<leader>e` | File explorer (netrw `:Explore`) |
 | `<leader>cd` | cd to current file's dir (so pickers follow you) |
+| `<leader><Esc>` | Zoom the current window fullscreen / back (toggle) |
+| `Ctrl-h/j/k/l` | Move between split windows |
 
 ### LSP (in code buffers)
 | Key | Action |
