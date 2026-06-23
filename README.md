@@ -137,6 +137,7 @@ of every mapping.
 | `<leader>gt` | Toggle the PR panel (description / status / comments / inline comments) |
 | `<leader>gi` | Toggle inline PR comments rendered on the diff lines |
 | `<leader>gR` | Finish review (remove the worktree) |
+| `<leader>gw` | **Worktrees** — list/switch (preview commits + status), `ctrl-n` create, `ctrl-x` remove |
 
 Inside diffview: `<Tab>`/`<S-Tab>` next/prev file, `gf` jump to real file, `g?` help.
 
@@ -147,6 +148,13 @@ and **inline per-line comments**; `<leader>gt` hides/re-shows it. Inline comment
 are *also rendered right on the diff* — as virtual lines under the commented line
 of the new file (with a `▌` gutter mark), so you read each one in context as you
 scroll. `<leader>gi` toggles them off/on.
+
+**`<leader>gw`** maps every worktree of the repo — handy when agents spin up
+several and you lose track. Each row shows the current marker, branch, path, a
+`clean`/`✗ dirty`/`(PR review)`/`(prunable)` tag and the last commit (subject ·
+age), sorted current → dirty → clean; the preview pane shows that worktree's
+recent commits and working-tree status. `Enter` jumps in (`tcd` + files picker),
+`ctrl-n` creates a new worktree (prompts a branch), `ctrl-x` removes one.
 
 ---
 

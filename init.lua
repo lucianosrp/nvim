@@ -738,6 +738,130 @@ map("n", "<leader>gi", toggle_inline, { desc = "Toggle inline PR comments on dif
 map("n", "<leader>gR", cleanup_review, { desc = "Finish PR review (remove worktree)" })
 
 -- ---------------------------------------------------------------------------
+-- <leader>gw — worktree switcher. One keybind to see every worktree of the repo
+-- and jump to one — the "where has the agent been working?" map. Each row shows
+-- ● current · branch · path · clean/✗dirty/(PR review)/(prunable) · last commit
+-- (subject · age); rows are sorted current → dirty → clean. The fzf preview pane
+-- shows the highlighted worktree's recent commits + working-tree status. Native
+-- git + fzf-lua, no plugin.
+--   Enter   switch: tcd into it + open its files picker
+--   ctrl-n  create a new worktree (prompts a branch) and jump in
+--   ctrl-x  remove the selected worktree (confirm; prunes stale entries)
+-- ---------------------------------------------------------------------------
+local function list_worktrees(root)
+  local out = vim.system({ "git", "-C", root, "worktree", "list", "--porcelain" }, { text = true }):wait()
+  if out.code ~= 0 then return {} end
+  local wts, cur = {}, nil
+  for _, line in ipairs(vim.split(out.stdout or "", "\n")) do
+    local p = line:match("^worktree (.+)$")
+    if p then
+      cur = { path = p }
+      wts[#wts + 1] = cur
+    elseif cur then
+      local b = line:match("^branch refs/heads/(.+)$")
+      if b then cur.branch = b
+      elseif line == "detached" then cur.branch = "(detached)"
+      elseif line == "bare" then cur.branch = "(bare)"
+      elseif line:match("^prunable") then cur.prunable = true end
+    end
+  end
+  return wts
+end
+
+local function worktrees()
+  local root = git_root_of(0) -- toplevel of the worktree we're currently in
+  if not root then
+    vim.notify("Not inside a git repo", vim.log.levels.ERROR)
+    return
+  end
+  local f = load_fzf()
+  if not f then return end
+  local pr_dir = vim.fs.joinpath(vim.fn.stdpath("cache"), "pr-review")
+  local wts = list_worktrees(root)
+  if #wts == 0 then
+    vim.notify("No worktrees", vim.log.levels.INFO)
+    return
+  end
+  -- enrich: current/PR flags, dirty state, and last commit (subject · age)
+  for _, w in ipairs(wts) do
+    w.current = (w.path == root)
+    w.pr = (w.path:sub(1, #pr_dir) == pr_dir)
+    local st = vim.system({ "git", "-C", w.path, "status", "--porcelain" }, { text = true }):wait()
+    w.dirty = st.code == 0 and vim.trim(st.stdout or "") ~= ""
+    local lg = vim.system({ "git", "-C", w.path, "log", "-1", "--format=%s\31%cr" }, { text = true }):wait()
+    if lg.code == 0 then w.subject, w.age = vim.trim(lg.stdout or ""):match("^(.-)\31(.*)$") end
+  end
+  -- sort: current → dirty (needs attention) → clean → prunable; path tiebreak
+  table.sort(wts, function(a, b)
+    local function rank(w) return w.current and 0 or (w.prunable and 3 or (w.dirty and 1 or 2)) end
+    local ra, rb = rank(a), rank(b)
+    if ra ~= rb then return ra < rb end
+    return a.path < b.path
+  end)
+  -- entry = "<abspath>\t<display>": fzf shows only the display (--with-nth 2..);
+  -- the preview command and the actions recover the path from field 1.
+  local entries = {}
+  for _, w in ipairs(wts) do
+    local tag = w.prunable and "(prunable)" or (w.pr and "(PR review)" or (w.dirty and "✗ dirty" or "clean"))
+    local subj = w.subject
+        and ('"%s" · %s'):format(#w.subject > 36 and (w.subject:sub(1, 35) .. "…") or w.subject, w.age or "?")
+        or ""
+    local disp = ("%s %-18s %-32s %-11s %s"):format(
+      w.current and "●" or " ", w.branch or "?", vim.fn.fnamemodify(w.path, ":~"), tag, subj)
+    entries[#entries + 1] = w.path .. "\t" .. disp
+  end
+  local function path_of(sel) return sel and sel[1] and sel[1]:match("^(.-)\t") end
+  -- switch cwd to a worktree and drop straight into its files picker
+  local function jump(path)
+    vim.cmd.tcd(vim.fn.fnameescape(path))
+    vim.notify("cwd → " .. vim.fn.fnamemodify(path, ":~"), vim.log.levels.INFO)
+    vim.schedule(function() f.files({ cwd = path }) end)
+  end
+  f.fzf_exec(entries, {
+    prompt = "Worktrees> ",
+    fzf_opts = { ["--delimiter"] = "\t", ["--with-nth"] = "2..", ["--no-multi"] = true },
+    -- preview the highlighted worktree: recent commits + its working-tree status
+    preview = "git -C {1} -c color.ui=always log --oneline -15 2>/dev/null; "
+      .. "echo; echo '── working tree ──'; git -C {1} -c color.status=always status -s 2>/dev/null",
+    actions = {
+      ["default"] = function(sel)
+        local p = path_of(sel)
+        if p then jump(p) end
+      end,
+      ["ctrl-n"] = function()
+        local name = vim.trim(vim.fn.input("New worktree branch: "))
+        if name == "" then return end
+        local path = vim.fs.dirname(root) .. "/" .. vim.fs.basename(root) .. "-" .. (name:gsub("[^%w._-]", "-"))
+        -- new branch if it doesn't exist, else check the existing branch out
+        local r = vim.system({ "git", "-C", root, "worktree", "add", "-b", name, path }, { text = true }):wait()
+        if r.code ~= 0 then
+          r = vim.system({ "git", "-C", root, "worktree", "add", path, name }, { text = true }):wait()
+        end
+        if r.code == 0 then jump(path)
+        else vim.notify("worktree add failed:\n" .. (r.stderr or ""), vim.log.levels.ERROR) end
+      end,
+      ["ctrl-x"] = function(sel)
+        local p = path_of(sel)
+        if not p then return end
+        if p == root then
+          vim.notify("Refusing to remove the worktree you're in", vim.log.levels.WARN)
+          return
+        end
+        if vim.fn.confirm("Remove worktree?\n" .. p, "&Yes\n&No", 2) ~= 1 then return end
+        local r = vim.system({ "git", "-C", root, "worktree", "remove", "--force", p }, { text = true }):wait()
+        if r.code ~= 0 then -- stale/prunable entry whose dir is already gone
+          r = vim.system({ "git", "-C", root, "worktree", "prune" }, { text = true }):wait()
+        end
+        vim.notify(
+          r.code == 0 and ("Removed " .. vim.fn.fnamemodify(p, ":~")) or ("remove failed:\n" .. (r.stderr or "")),
+          r.code == 0 and vim.log.levels.INFO or vim.log.levels.ERROR)
+      end,
+    },
+  })
+end
+map("n", "<leader>gw", worktrees, { desc = "Worktrees: list / switch / create / remove" })
+
+-- ---------------------------------------------------------------------------
 -- Python virtualenv: auto-detect + an fzf-lua picker to switch (no new plugin).
 -- ty/ruff locate site-packages from $VIRTUAL_ENV, and ty only auto-detects a
 -- `.venv` in its OWN project root — which misses monorepos that share a single
