@@ -1,0 +1,43 @@
+name: CI
+
+# Safety net for a PR-driven, git-pull-deployed config: every change is loaded
+# headlessly on a real Neovim before it can land on main (and thus on every
+# machine that pulls). Catches syntax/load errors in init.lua, bad plugin specs,
+# and broken query files — the kinds of mistakes that would otherwise break nvim
+# everywhere on the next `git pull`.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  smoke:
+    name: config loads (headless)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Neovim (stable ≥ 0.12)
+        uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: stable
+
+      - name: Install this repo as the Neovim config
+        run: |
+          mkdir -p "$HOME/.config"
+          cp -r "$GITHUB_WORKSPACE" "$HOME/.config/nvim"
+          nvim --version | head -1
+
+      - name: Load headless — fail on any error
+        run: |
+          # +qa loads init.lua fully (plugins via vim.pack, query overrides,
+          # autocmds) then quits. Any Lua error or E-code is a failure.
+          out=$(timeout 300 nvim --headless +qa 2>&1 || true)
+          printf '%s\n' "$out"
+          if printf '%s\n' "$out" | grep -iE 'error|E[0-9]+:'; then
+            echo "::error::Neovim reported errors while loading the config"
+            exit 1
+          fi
+          echo "OK — config loaded cleanly"

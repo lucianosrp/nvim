@@ -1,5 +1,7 @@
 # Fast Neovim config
 
+[![CI](https://github.com/lucianosrp/nvim/actions/workflows/ci.yml/badge.svg)](https://github.com/lucianosrp/nvim/actions/workflows/ci.yml)
+
 A deliberately small, fast Neovim setup for Python work and quick file/diff
 navigation. **Two goals drive every decision:**
 
