@@ -1410,6 +1410,12 @@ vim.api.nvim_create_autocmd("BufWritePre", {
 -- available (and which aren't), plus copy-paste debug steps and the tail of any
 -- recent log errors. No plugin — there's no :LspInfo without nvim-lspconfig.
 -- ---------------------------------------------------------------------------
+-- non-deprecated log path (vim.lsp.get_log_path() is deprecated in 0.12)
+local function lsp_log_path()
+  if vim.lsp.log and vim.lsp.log.get_filename then return vim.lsp.log.get_filename() end
+  return vim.fn.stdpath("log") .. "/lsp.log"
+end
+
 local function lsp_tail_errors(path, n)
   local f = io.open(path, "r")
   if not f then return {} end
@@ -1426,34 +1432,48 @@ local function lsp_tail_errors(path, n)
   return out
 end
 
-local function lsp_status_lines()
-  local L = {}
-  local function add(s) L[#L + 1] = s end
+-- Build the dashboard as (lines, marks): each row is a list of {text, hl?}
+-- segments, so we get aligned columns with coloured status glyphs — not markdown.
+local lsp_status_ns = vim.api.nvim_create_namespace("lsp_status")
+local function lsp_dashboard()
+  local lines, marks = {}, {}
+  local function add(segs)
+    local text, col = "", 0
+    for _, s in ipairs(segs or {}) do
+      local t = s[1] or ""
+      if s[2] and t ~= "" then marks[#marks + 1] = { #lines, col, col + #t, s[2] } end
+      text, col = text .. t, col + #t
+    end
+    lines[#lines + 1] = text
+  end
+  local function trunc(s, n) s = s or ""; return vim.fn.strchars(s) > n and (s:sub(1, n - 1) .. "…") or s end
+  local function header(label) add({ { "  " }, { label, "Title" } }) end
+
   local buf = vim.api.nvim_get_current_buf()
-  local ft = vim.bo[buf].filetype
-  add("# LSP status")
-  add("")
-  add("## This buffer" .. (ft ~= "" and (" (" .. ft .. ")") or ""))
+  local running = {}
+  for _, c in ipairs(vim.lsp.get_clients()) do running[c.name] = c.id end
+
+  add({ { "  " .. (vim.g.have_nerd_font and "󰒋 " or "") .. "LSP", "Title" } })
+  add({ { "  " .. ("─"):rep(58), "Comment" } })
+  add({})
+
+  -- Buffer: who's attached here
+  header("BUFFER  " .. (vim.bo[buf].filetype ~= "" and vim.bo[buf].filetype or "—"))
   local attached = vim.lsp.get_clients({ bufnr = buf })
   if #attached == 0 then
-    add("_no client attached_")
+    add({ { "    no client attached", "Comment" } })
   else
     for _, c in ipairs(attached) do
-      add(("- **%s** (id %d) — root: `%s`"):format(c.name, c.id, c.root_dir or "—"))
+      add({
+        { "    " }, { "● ", "DiagnosticOk" }, { ("%-14s"):format(c.name) },
+        { "#" .. c.id .. "  ", "Comment" }, { trunc(vim.fn.fnamemodify(c.root_dir or "", ":~"), 34), "Comment" },
+      })
     end
   end
-  add("")
-  add("## Running clients")
-  local all = vim.lsp.get_clients()
-  if #all == 0 then
-    add("_none_")
-  else
-    local n = {}
-    for _, c in ipairs(all) do n[#n + 1] = ("%s#%d"):format(c.name, c.id) end
-    add(table.concat(n, ", "))
-  end
-  add("")
-  add("## Configured (enabled when the tool is present)")
+  add({})
+
+  -- Servers: configured ↔ available ↔ running
+  header("SERVERS")
   local servers = {
     { "ty", function() return vim.fn.executable("ty") == 1 end, "uv tool install ty" },
     { "ruff", function() return vim.fn.executable("ruff") == 1 end, "uv tool install ruff" },
@@ -1461,23 +1481,41 @@ local function lsp_status_lines()
     { "rust_analyzer", function() return vim.fn.executable("rust-analyzer") == 1 or vim.fn.executable("rustup") == 1 end, "rustup component add rust-analyzer" },
   }
   for _, s in ipairs(servers) do
-    local ok = s[2]()
-    add(("- %s **%s**%s"):format(ok and "✓" or "✗", s[1], ok and "" or ("  — missing: `" .. s[3] .. "`")))
+    local name, present = s[1], s[2]()
+    local glyph, ghl, status, shl
+    if running[name] then
+      glyph, ghl, status, shl = "● ", "DiagnosticOk", "running", "DiagnosticOk"
+    elseif present then
+      glyph, ghl, status, shl = "○ ", "DiagnosticHint", "idle", "Comment"
+    else
+      glyph, ghl, status, shl = "✗ ", "DiagnosticError", s[3], "Comment"
+    end
+    add({ { "    " }, { glyph, ghl }, { ("%-15s"):format(name) }, { status, shl } })
   end
-  add("")
-  add("## Debug")
-  add("- Log: `" .. vim.lsp.get_log_path() .. "`")
-  add("- Open log: `:lua vim.cmd.edit(vim.lsp.get_log_path())`")
-  add("- Verbose: `:lua vim.lsp.set_log_level('debug')` then reproduce")
-  add("- Health: `:checkhealth vim.lsp`")
-  add("- Restart here: `:lua vim.lsp.stop_client(vim.lsp.get_clients({bufnr=0}))` then `:e`")
-  local errs = lsp_tail_errors(vim.lsp.get_log_path(), 5)
+  add({})
+
+  -- Debug: copy-paste steps
+  header("DEBUG")
+  local function kv(k, v) add({ { "    " }, { ("%-8s"):format(k), "Function" }, { trunc(v, 46), "Comment" } }) end
+  kv("log", lsp_log_path())
+  kv("open", ":lua vim.cmd.edit(vim.lsp.log.get_filename())")
+  kv("verbose", ":lua vim.lsp.set_log_level('debug')")
+  kv("health", ":checkhealth vim.lsp")
+  kv("restart", ":lua vim.lsp.stop_client(vim.lsp.get_clients({bufnr=0}))")
+  add({})
+
+  -- Recent errors, if any
+  local errs = lsp_tail_errors(lsp_log_path(), 5)
   if #errs > 0 then
-    add("")
-    add("## Recent log errors")
-    for _, e in ipairs(errs) do add("`" .. e:sub(1, 180) .. "`") end
+    header("RECENT ERRORS")
+    for _, e in ipairs(errs) do
+      add({ { "    " }, { "▸ ", "DiagnosticError" }, { trunc(e:gsub("%s+", " "), 52), "Comment" } })
+    end
+    add({})
   end
-  return L
+
+  add({ { "  q", "Function" }, { " close", "Comment" } })
+  return lines, marks
 end
 
 local function toggle_lsp_status()
@@ -1487,20 +1525,22 @@ local function toggle_lsp_status()
     _G.__lsp_status_win = nil
     return
   end
-  local lines = lsp_status_lines()
+  local lines, marks = lsp_dashboard()
   local b = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(b, 0, -1, false, lines)
-  vim.bo[b].filetype = "markdown"
+  for _, m in ipairs(marks) do
+    pcall(vim.api.nvim_buf_set_extmark, b, lsp_status_ns, m[1], m[2], { end_col = m[3], hl_group = m[4] })
+  end
   vim.bo[b].modifiable = false
   vim.bo[b].bufhidden = "wipe"
-  local width = math.min(92, math.floor(vim.o.columns * 0.7))
-  local height = math.min(#lines, math.floor(vim.o.lines * 0.8))
+  local width = 64
+  local height = math.min(#lines, math.floor(vim.o.lines * 0.85))
   _G.__lsp_status_win = vim.api.nvim_open_win(b, true, {
     relative = "editor", width = width, height = height,
     col = math.floor((vim.o.columns - width) / 2), row = math.floor((vim.o.lines - height) / 2),
-    style = "minimal", border = "rounded", title = " LSP ", title_pos = "center",
+    style = "minimal", border = "rounded", title = " status ", title_pos = "center",
   })
-  vim.wo[_G.__lsp_status_win].wrap = true
+  vim.wo[_G.__lsp_status_win].cursorline = true
   vim.keymap.set("n", "q", "<cmd>close<cr>", { buffer = b, nowait = true })
   vim.keymap.set("n", "<Esc>", "<cmd>close<cr>", { buffer = b, nowait = true })
 end
