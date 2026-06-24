@@ -79,10 +79,14 @@ interleaves with plugin/parser progress messages.
 ## Known gotchas
 
 - **Markdown Treesitter crash** (`attempt to call method 'range' (a nil value)`):
-  nvim-treesitter `master`'s markdown injection query is incompatible with
-  Neovim 0.12 core. Neutralized by the empty `queries/markdown*/injections.scm`
-  overrides (no `; extends` → authoritative). Keep them unless migrating TS to
-  the `main` branch.
+  nvim-treesitter `master`'s **bundled** markdown injection query crashes on
+  Neovim 0.12 core. `queries/markdown/injections.scm` is an **authoritative**
+  override (no `; extends`) carrying only two safe injections — fenced-code-block
+  language injection (so ```python` etc. highlight) and inline→markdown_inline.
+  `queries/markdown_inline/injections.scm` stays **empty** (its bundled query is
+  where the crash actually lives). Don't add `; extends` (re-pulls the crashing
+  query) and don't put injections in the markdown_inline file. Revisit if TS
+  moves to the `main` branch (ships a compatible query).
 - **Diff foreground:** the `default` scheme sets a white `fg` on
   `DiffAdd`/`DiffChange`/`DiffText`, hiding syntax. `style()` overrides them to
   background-only tints. Don't reintroduce a `fg` on those.

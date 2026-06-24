@@ -116,6 +116,30 @@ of every mapping.
 | `<leader>rn` `<leader>ca` `<leader>F` | Rename / code action / format |
 | `[d` `]d` `<leader>d` | Prev / next / show line diagnostic |
 
+### Python REPL (inline, ephemeral)
+| Key | Action |
+|-----|--------|
+| `<leader>r` (visual) | Run the selected lines in a live kernel |
+| `<leader>rr` | Run the current paragraph — or, in Markdown, the enclosing ```python fence |
+| `<leader>rc` | Clear the inline outputs |
+| `<leader>rk` | Restart the kernel (fresh state) |
+
+Select Python code and run it in a persistent **ipykernel** living in your
+**active venv** — output (stdout, the `Out[n]` result, and tracebacks) renders as
+dim **virtual lines under the code**, never written into the buffer. State
+persists across runs, so it's a real REPL: define something in one selection,
+use it in the next. An output stays put until you **edit the code that produced
+it** — adding a line just below it leaves it in place. In a **Markdown** file,
+`<leader>rr` runs the ```python` / ```py` fenced block under your cursor. Needs
+`ipykernel` in the venv (`uv pip install ipykernel`); if it's missing the keys
+just say so. No plugin — a tiny stdio daemon (`python/jrepl.py`) runs in the venv
+python and Neovim only renders.
+
+### Markdown
+Fenced code blocks are highlighted in their own language (```python`, ```lua`, …)
+and folding is on by sections (headers) and code fences — `za`/`zo`/`zc` to
+toggle a fold, `zR`/`zM` to open/close all. Files open fully unfolded.
+
 ### Git
 | Key | Action |
 |-----|--------|
