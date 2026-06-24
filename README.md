@@ -115,7 +115,7 @@ of every mapping.
 | `<leader>?` | Help tags |
 | `<leader>k` | Keymaps cheatsheet |
 | `<leader>uc` | Colorschemes (live preview) |
-| `<leader>v` | Pick a Python virtualenv |
+| `<leader>v` | Python venv dashboard — switch venv, `i` installs ipykernel |
 | `<leader>e` | File explorer (netrw `:Explore`) |
 | `<leader>cd` | cd to current file's dir (so pickers follow you) |
 | `<leader><Esc>` | Zoom the current window fullscreen / back (toggle) |
@@ -209,8 +209,13 @@ recent commits and working-tree status. `Enter` jumps in (`tcd` + files picker),
 - **Python virtualenv detection.** On opening a `.py` file, the nearest
   `.venv`/`venv`/`env` is found by walking up from the file and exported as
   `VIRTUAL_ENV` before ty/ruff start — so monorepos that share one `.venv` above
-  per-package `pyproject.toml` resolve correctly. `<leader>v` switches venv
-  (fzf picker). A shell-activated venv always wins.
+  per-package `pyproject.toml` resolve correctly. A shell-activated venv always
+  wins. The active venv (and a Python/Rust glyph) shows on the **right of the
+  statusline**.
+- **Venv dashboard (`<leader>v`).** A floating panel listing every discovered
+  venv: the active one marked, each tagged `✓ ipykernel` / `✗ no kernel`. `<CR>`
+  switches venv (restarts the LSP); `i` installs ipykernel into the highlighted
+  one (`uv pip install …`); `q` closes.
 - **Format on save.** Python buffers are formatted with **ruff** on `:w`
   (skipped for files > 1 MB). `<leader>F` formats manually.
 - **PR / branch review in a worktree.** `<leader>gr` fetches a branch, checks it

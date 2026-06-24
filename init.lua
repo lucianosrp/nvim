@@ -120,7 +120,26 @@ function _G.statusline()
   if (d[vim.diagnostic.severity.ERROR] or 0) > 0 then diag = diag .. " E" .. d[vim.diagnostic.severity.ERROR] end
   if (d[vim.diagnostic.severity.WARN] or 0) > 0 then diag = diag .. " W" .. d[vim.diagnostic.severity.WARN] end
   -- %< truncate-from-here, %= left/right split, %l:%c line:col
-  return "%<" .. rel .. flags .. "%=" .. diag .. "  %l:%c "
+  return "%<" .. rel .. flags .. "%=" .. _G.venv_segment() .. diag .. "  %l:%c "
+end
+
+-- Right-side venv / language indicator. Cheap: reads $VIRTUAL_ENV + filetype, no
+-- filesystem walk (the statusline re-evaluates constantly). Nerd-Font icons for
+-- Python/Rust when available, else a short text tag.
+function _G.venv_segment()
+  local ft = vim.bo.filetype
+  local nf = vim.g.have_nerd_font
+  if ft == "python" then
+    local v, name = vim.env.VIRTUAL_ENV, "no venv"
+    if v and v ~= "" then
+      name = vim.fs.basename(v)
+      if name == ".venv" or name == "venv" or name == "env" then name = vim.fs.basename(vim.fs.dirname(v)) end
+    end
+    return (nf and " " or "py:") .. name .. "  "
+  elseif ft == "rust" then
+    return (nf and " " or "rs:") .. "rust  "
+  end
+  return ""
 end
 vim.o.statusline = "%!v:lua.statusline()"
 
@@ -931,9 +950,26 @@ local function restart_python_lsp()
   end, 250)
 end
 
-vim.keymap.set("n", "<leader>v", function()
-  local fzf = load_fzf()
-  if not fzf then return end
+-- <leader>v — venv dashboard: lists discovered venvs (project + ~/.virtualenvs),
+-- marks the active one, shows whether each has ipykernel, and lets you switch
+-- (<CR>) or install ipykernel into the highlighted one (i). Same dashboard style
+-- as <leader>l: aligned columns + coloured glyphs, navigated with j/k.
+local venv_ns = vim.api.nvim_create_namespace("venv_picker")
+
+local function venv_label(p)
+  local b = vim.fs.basename(p)
+  if b == ".venv" or b == "venv" or b == "env" then b = vim.fs.basename(vim.fs.dirname(p)) end
+  return b
+end
+local function venv_python(v)
+  if vim.fn.filereadable(v .. "/bin/python") == 1 then return v .. "/bin/python" end
+  return v .. "/Scripts/python.exe"
+end
+local function venv_has_ipykernel(v)
+  return #vim.fn.glob(v .. "/lib/python*/site-packages/ipykernel", true, true) > 0
+    or #vim.fn.glob(v .. "/Lib/site-packages/ipykernel", true, true) > 0
+end
+local function venv_collect()
   local seen, items = {}, {}
   local function add(p)
     p = vim.fn.fnamemodify(p, ":p"):gsub("/+$", "")
@@ -942,26 +978,129 @@ vim.keymap.set("n", "<leader>v", function()
       items[#items + 1] = p
     end
   end
-  for _, v in ipairs(find_venvs_up(vim.api.nvim_buf_get_name(0))) do add(v) end
-  for _, v in ipairs(vim.fn.glob(vim.fn.expand("~/.virtualenvs/*"), true, true)) do add(v) end
+  local alt = vim.fn.bufnr("#")
+  if alt > 0 then
+    for _, v in ipairs(find_venvs_up(vim.api.nvim_buf_get_name(alt))) do add(v) end
+  end
+  for _, v in ipairs(find_venvs_up(vim.fn.getcwd())) do add(v) end
+  for _, v in ipairs(vim.fn.glob("~/.virtualenvs/*", true, true)) do add(v) end -- glob expands ~ and *
+  return items
+end
+
+local function venv_populate(b)
+  local lines, marks, rowmap = {}, {}, {}
+  local function add(segs)
+    local text, col = "", 0
+    for _, s in ipairs(segs or {}) do
+      local t = s[1] or ""
+      if s[2] and t ~= "" then marks[#marks + 1] = { #lines, col, col + #t, s[2] } end
+      text, col = text .. t, col + #t
+    end
+    lines[#lines + 1] = text
+  end
+  add({ { "  " .. (vim.g.have_nerd_font and " " or "") .. "VENV", "Title" } })
+  add({ { "  " .. ("─"):rep(58), "Comment" } })
+  add({})
+  local active = vim.env.VIRTUAL_ENV
+  if active and active ~= "" then active = vim.fn.fnamemodify(active, ":p"):gsub("/+$", "") end
+  local items = venv_collect()
   if #items == 0 then
-    vim.notify("No virtualenvs found", vim.log.levels.WARN)
+    add({ { "    no virtualenvs found", "Comment" } })
+  else
+    for _, v in ipairs(items) do
+      local cur, kern = v == active, venv_has_ipykernel(v)
+      add({
+        { "  " },
+        { cur and "● " or "  ", cur and "DiagnosticOk" or nil },
+        { ("%-18s"):format(venv_label(v)) },
+        { kern and "✓ ipykernel" or "✗ no kernel", kern and "DiagnosticOk" or "DiagnosticHint" },
+        { "  " },
+        { vim.fn.fnamemodify(v, ":~"), "Comment" },
+      })
+      rowmap[#lines] = v
+    end
+  end
+  add({})
+  add({
+    { "  ↵", "Function" }, { " select   ", "Comment" },
+    { "i", "Function" }, { " install ipykernel   ", "Comment" },
+    { "q", "Function" }, { " close", "Comment" },
+  })
+  vim.bo[b].modifiable = true
+  vim.api.nvim_buf_set_lines(b, 0, -1, false, lines)
+  vim.api.nvim_buf_clear_namespace(b, venv_ns, 0, -1)
+  for _, m in ipairs(marks) do
+    pcall(vim.api.nvim_buf_set_extmark, b, venv_ns, m[1], m[2], { end_col = m[3], hl_group = m[4] })
+  end
+  vim.bo[b].modifiable = false
+  _G.__venv_rowmap = rowmap
+end
+
+local function venv_under_cursor()
+  return _G.__venv_rowmap and _G.__venv_rowmap[vim.api.nvim_win_get_cursor(0)[1]]
+end
+local function venv_close()
+  if _G.__venv_win and vim.api.nvim_win_is_valid(_G.__venv_win) then
+    vim.api.nvim_win_close(_G.__venv_win, true)
+  end
+  _G.__venv_win = nil
+end
+local function venv_select()
+  local v = venv_under_cursor()
+  if not v then return end
+  venv_override = v
+  vim.env.VIRTUAL_ENV = v
+  venv_close()
+  vim.notify("venv → " .. venv_label(v), vim.log.levels.INFO)
+  restart_python_lsp()
+end
+local function venv_install()
+  local v = venv_under_cursor()
+  if not v then return end
+  if venv_has_ipykernel(v) then
+    vim.notify(venv_label(v) .. " already has ipykernel", vim.log.levels.INFO)
     return
   end
-  fzf.fzf_exec(items, {
-    prompt = "venv> ",
-    actions = {
-      ["default"] = function(sel)
-        if sel and sel[1] then
-          venv_override = vim.fn.fnamemodify(sel[1], ":p"):gsub("/+$", "")
-          vim.env.VIRTUAL_ENV = venv_override
-          vim.notify("venv → " .. venv_override, vim.log.levels.INFO)
-          restart_python_lsp()
-        end
-      end,
-    },
+  local py = venv_python(v)
+  local cmd = vim.fn.executable("uv") == 1 and { "uv", "pip", "install", "--python", py, "ipykernel" }
+    or { py, "-m", "pip", "install", "ipykernel" }
+  vim.notify("Installing ipykernel into " .. venv_label(v) .. " …", vim.log.levels.INFO)
+  local b = vim.api.nvim_get_current_buf()
+  vim.system(cmd, { text = true }, function(r)
+    vim.schedule(function()
+      if r.code == 0 then
+        vim.notify("ipykernel installed in " .. venv_label(v), vim.log.levels.INFO)
+        if vim.api.nvim_buf_is_valid(b) then venv_populate(b) end -- refresh the ✓/✗
+      else
+        vim.notify("ipykernel install failed:\n" .. (r.stderr or ""), vim.log.levels.ERROR)
+      end
+    end)
+  end)
+end
+
+vim.keymap.set("n", "<leader>v", function()
+  local b = vim.api.nvim_create_buf(false, true)
+  vim.bo[b].bufhidden = "wipe"
+  venv_populate(b)
+  local width = 64
+  local height = math.min(vim.api.nvim_buf_line_count(b), math.floor(vim.o.lines * 0.85))
+  _G.__venv_win = vim.api.nvim_open_win(b, true, {
+    relative = "editor", width = width, height = height,
+    col = math.floor((vim.o.columns - width) / 2), row = math.floor((vim.o.lines - height) / 2),
+    style = "minimal", border = "rounded", title = " python venv ", title_pos = "center",
   })
-end, { desc = "Select Python venv" })
+  vim.wo[_G.__venv_win].cursorline = true
+  local first
+  for ln in pairs(_G.__venv_rowmap or {}) do
+    if not first or ln < first then first = ln end
+  end
+  if first then vim.api.nvim_win_set_cursor(_G.__venv_win, { first, 0 }) end
+  local opts = { buffer = b, nowait = true }
+  vim.keymap.set("n", "<CR>", venv_select, opts)
+  vim.keymap.set("n", "i", venv_install, opts)
+  vim.keymap.set("n", "q", venv_close, opts)
+  vim.keymap.set("n", "<Esc>", venv_close, opts)
+end, { desc = "Python venv dashboard (switch / install ipykernel)" })
 
 -- ---------------------------------------------------------------------------
 -- Dynamic Python REPL — select code, run it in a persistent ipykernel, see the
