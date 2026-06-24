@@ -170,9 +170,11 @@ local ok_ts, tsconfigs = pcall(require, "nvim-treesitter.configs")
 if ok_ts then
   tsconfigs.setup({
     ensure_installed = {
-      "python", "rust", "lua", "vim", "vimdoc", "bash",
+      "python", "lua", "vim", "vimdoc", "bash",
       "json", "yaml", "toml", "markdown", "markdown_inline",
     },
+    -- note: `rust` is intentionally NOT pre-installed — auto_install compiles it
+    -- on demand the first time you open a .rs file, so Rust stays fully optional
     auto_install = true,           -- compile a missing parser on first open (uses gcc)
     highlight = {
       enable = true,

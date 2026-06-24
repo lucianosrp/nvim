@@ -36,11 +36,13 @@ is present).
 - **Neovim ≥ 0.12** (needs `vim.pack`, native LSP API, `vim.uv`, `vim.base64`)
 - `git`, a C compiler (`gcc`) for Treesitter parsers
 - `ripgrep`, `fzf` (and optionally `fd`)
-- Optional language tooling — each LSP is enabled **only if its tool is on `PATH`**,
-  so a machine without it opens files cleanly:
-  - Python: `ty` + `ruff` (via `uv tool install`)
-  - Rust: `rust-analyzer` + `rustfmt` + `clippy` (via `rustup component add`; the
-    config also finds the rustup toolchain binary when there's no PATH proxy)
+- Language tooling — each LSP is enabled **only if its tool is present**, so a
+  machine without it opens files cleanly:
+  - Python: `ty` + `ruff` (the installer sets these up via `uv`)
+  - Rust: **fully optional, not installed by the installer.** Add it yourself
+    with `rustup component add rust-analyzer rustfmt clippy` — the editor then
+    finds it (PATH or the rustup toolchain binary) and the `rust` Treesitter
+    parser compiles on demand the first time you open a `.rs` file.
 - Optional: `wl-clipboard` (Wayland) or `xclip`/`xsel` (X11) for system-clipboard
   copy **and** paste locally; without it, copy still works over SSH via OSC 52
 - Optional: a **Nerd Font** in your terminal for file icons
