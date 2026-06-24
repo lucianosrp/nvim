@@ -17,6 +17,7 @@ built-in `vim.pack` (Neovim 0.12+). No lazy.nvim, no Mason, no LazyVim.
 |------|------|-------|
 | Fuzzy find | **fzf-lua** + `fzf`/`ripgrep`/`fd` | files, live grep, symbols, keymaps, colorschemes |
 | Python LSP | **ty** (type check) + **ruff** (lint/format) | native `vim.lsp`, no lspconfig |
+| Rust LSP | **rust-analyzer** (clippy-on-save, inlay hints, rustfmt) | native `vim.lsp`; resolves the rustup toolchain binary |
 | Syntax colors | **nvim-treesitter** (`master`) | rich highlighting |
 | Git signs | **gitsigns.nvim** | add/change/delete + hunk ops |
 | Diff / PR review | **diffview.nvim** | Zed-style review, branch/PR-in-a-worktree |
@@ -35,7 +36,13 @@ is present).
 - **Neovim ≥ 0.12** (needs `vim.pack`, native LSP API, `vim.uv`, `vim.base64`)
 - `git`, a C compiler (`gcc`) for Treesitter parsers
 - `ripgrep`, `fzf` (and optionally `fd`)
-- `ty` and `ruff` on `PATH` (installed via `uv tool install`)
+- Language tooling — each LSP is enabled **only if its tool is present**, so a
+  machine without it opens files cleanly:
+  - Python: `ty` + `ruff` (the installer sets these up via `uv`)
+  - Rust: **fully optional, not installed by the installer.** Add it yourself
+    with `rustup component add rust-analyzer rustfmt clippy` — the editor then
+    finds it (PATH or the rustup toolchain binary) and the `rust` Treesitter
+    parser compiles on demand the first time you open a `.rs` file.
 - Optional: `wl-clipboard` (Wayland) or `xclip`/`xsel` (X11) for system-clipboard
   copy **and** paste locally; without it, copy still works over SSH via OSC 52
 - Optional: a **Nerd Font** in your terminal for file icons
@@ -115,6 +122,10 @@ of every mapping.
 | `gr` | References (fzf) · `K` Hover |
 | `<leader>rn` `<leader>ca` `<leader>F` | Rename / code action / format |
 | `[d` `]d` `<leader>d` | Prev / next / show line diagnostic |
+| `<leader>uh` | Toggle inlay hints (on by default for Rust) |
+
+Python and Rust **format on save** (ruff / rustfmt). Each LSP is enabled only
+when its tool is installed.
 
 ### Python REPL (inline, ephemeral)
 | Key | Action |
@@ -285,11 +296,13 @@ one, re-apply with `:colorscheme <name>`.
 ### Add an LSP server
 1. Put the server binary on `PATH` (`uv tool install <server>` or your package
    manager).
-2. Define and enable it near the existing `ty`/`ruff` block:
+2. Define it near the existing `ty`/`ruff`/`rust_analyzer` block, then add it to
+   the gated enable list (so it only starts when the binary is present):
    ```lua
    vim.lsp.config("gopls", { cmd = { "gopls" }, filetypes = { "go" },
      root_markers = { "go.mod", ".git" } })
-   vim.lsp.enable({ "ty", "ruff", "gopls" })
+   -- in the enable block:
+   if vim.fn.executable("gopls") == 1 then lsp_on[#lsp_on + 1] = "gopls" end
    ```
    Buffer keymaps (`gd`, `K`, …) attach automatically via the `LspAttach` autocmd.
 
