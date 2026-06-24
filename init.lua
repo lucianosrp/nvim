@@ -135,9 +135,9 @@ function _G.venv_segment()
       name = vim.fs.basename(v)
       if name == ".venv" or name == "venv" or name == "env" then name = vim.fs.basename(vim.fs.dirname(v)) end
     end
-    return (nf and " " or "py:") .. name .. "  "
+    return (nf and "\u{e73c} " or "py:") .. name .. "  " -- nf-dev-python (snake)
   elseif ft == "rust" then
-    return (nf and " " or "rs:") .. "rust  "
+    return (nf and "\u{e7a8} " or "rs:") .. "rust  " -- nf-dev-rust
   end
   return ""
 end
@@ -998,7 +998,7 @@ local function venv_populate(b)
     end
     lines[#lines + 1] = text
   end
-  add({ { "  " .. (vim.g.have_nerd_font and " " or "") .. "VENV", "Title" } })
+  add({ { "  " .. (vim.g.have_nerd_font and "\u{e73c} " or "") .. "VENV", "Title" } })
   add({ { "  " .. ("─"):rep(58), "Comment" } })
   add({})
   local active = vim.env.VIRTUAL_ENV
