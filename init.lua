@@ -1261,11 +1261,30 @@ vim.lsp.config("rust_analyzer", {
   },
 })
 
+-- Lua: lua-language-server, tuned for editing THIS config — it's told about the
+-- Neovim runtime so `vim.*` gets completion/hover/signatures, and that `vim` is
+-- a global (no "undefined global" noise). No format-on-save (don't reflow your
+-- hand-formatted config); <leader>F still formats on demand.
+vim.lsp.config("lua_ls", {
+  cmd = { "lua-language-server" },
+  filetypes = { "lua" },
+  root_markers = { ".luarc.json", ".luarc.jsonc", "stylua.toml", ".stylua.toml", ".git" },
+  settings = {
+    Lua = {
+      runtime = { version = "LuaJIT" },
+      diagnostics = { globals = { "vim" } },
+      workspace = { library = { vim.env.VIMRUNTIME }, checkThirdParty = false },
+      telemetry = { enable = false },
+    },
+  },
+})
+
 -- Enable a server only when its tool is actually present — otherwise opening a
--- .py/.rs file errors with "command not found" on a machine without the tool.
+-- file errors with "command not found" on a machine without the tool.
 local lsp_on = {}
 if vim.fn.executable("ty") == 1 then lsp_on[#lsp_on + 1] = "ty" end
 if vim.fn.executable("ruff") == 1 then lsp_on[#lsp_on + 1] = "ruff" end
+if vim.fn.executable("lua-language-server") == 1 then lsp_on[#lsp_on + 1] = "lua_ls" end
 if ra_cmd then lsp_on[#lsp_on + 1] = "rust_analyzer" end
 if #lsp_on > 0 then vim.lsp.enable(lsp_on) end
 
