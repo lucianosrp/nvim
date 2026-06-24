@@ -184,6 +184,22 @@ if ok_ts then
   })
 end
 
+-- Markdown: Treesitter-powered folding on sections (headers) and fenced code
+-- blocks. Opens fully unfolded (high foldlevel) so nothing is hidden on load;
+-- za/zc/zo to toggle, zR/zM to open/close all. Skipped on big files (the >1 MB
+-- guard sets foldmethod=manual). Code-fence language highlighting comes from the
+-- minimal queries/markdown/injections.scm override (the bundled query crashes 0.12).
+vim.api.nvim_create_autocmd("FileType", {
+  group = aug,
+  pattern = "markdown",
+  callback = function(args)
+    if vim.b[args.buf].large_file then return end
+    vim.opt_local.foldmethod = "expr"
+    vim.opt_local.foldexpr = "v:lua.vim.treesitter.foldexpr()"
+    vim.opt_local.foldlevel = 99
+  end,
+})
+
 -- File-type icons for fzf-lua pickers (guarded by the Nerd Font flag above).
 if vim.g.have_nerd_font then
   pcall(function() require("nvim-web-devicons").setup() end)
@@ -943,6 +959,255 @@ vim.keymap.set("n", "<leader>v", function()
     },
   })
 end, { desc = "Select Python venv" })
+
+-- ---------------------------------------------------------------------------
+-- Dynamic Python REPL — select code, run it in a persistent ipykernel, see the
+-- output inline (ephemeral virtual lines under the selection; never touches the
+-- buffer). State persists across sends, so it's a real REPL. nvim stays
+-- plugin-free: a tiny daemon (python/jrepl.py) runs in the ACTIVE VENV's python
+-- and speaks line-JSON over stdio; we only render. Needs `ipykernel` in the
+-- venv — absent → the keymaps no-op with a hint, so portability is preserved.
+--   x  <leader>r   run the selection      n  <leader>r   run the paragraph
+--   n  <leader>rc  clear inline outputs   n  <leader>rk  restart the kernel
+-- ---------------------------------------------------------------------------
+local repl = _G.__py_repl or { job = nil, ready = false, seq = 0, pending = {}, queue = {}, acc = "" }
+_G.__py_repl = repl
+repl.placed = repl.placed or {}     -- id -> { buf, span }: which code block each output covers
+repl.attached = repl.attached or {} -- buf -> true: on_lines hooked (clears output only on code edits)
+repl.stderr = repl.stderr or ""     -- tail of the daemon's stderr, for failure messages
+local repl_ns = vim.api.nvim_create_namespace("py_repl")
+
+local function repl_render(p)
+  if not vim.api.nvim_buf_is_valid(p.buf) then return end
+  local vlines, n = {}, 0
+  for _, seg in ipairs(p.parts) do
+    -- dim everything (a quiet "  ╎ " rail, no arrows); only errors keep colour
+    local hl = seg.kind == "error" and "DiagnosticError" or "Comment"
+    for _, ln in ipairs(vim.split((seg.text or ""):gsub("\n$", ""), "\n", { plain = true })) do
+      n = n + 1
+      if n > 200 then
+        vlines[#vlines + 1] = { { "╎ … (output truncated)", "Comment" } }
+        goto done
+      end
+      vlines[#vlines + 1] = { { "╎ " .. ln, hl } }
+    end
+  end
+  ::done::
+  pcall(vim.api.nvim_buf_set_extmark, p.buf, repl_ns, p.row, 0, { id = p.id, virt_lines = vlines })
+end
+
+-- resolve every still-running placeholder to an error so nothing hangs on
+-- "starting kernel…" when the daemon dies or never comes up
+local function repl_fail(msg)
+  for id, p in pairs(repl.pending) do
+    p.parts, p.running = { { kind = "error", text = msg } }, false
+    vim.schedule(function() repl_render(p) end)
+    repl.pending[id] = nil
+  end
+  vim.schedule(function() vim.notify("Python REPL: " .. msg, vim.log.levels.ERROR) end)
+end
+
+local function repl_process(line)
+  if line == "" then return end
+  local ok, m = pcall(vim.json.decode, line)
+  if not ok or type(m) ~= "table" then return end
+  if m.type == "ready" then
+    repl.ready = true
+    for _, payload in ipairs(repl.queue) do vim.fn.chansend(repl.job, payload) end
+    repl.queue = {}
+    -- queued sends showed "starting kernel…"; they're actually running now
+    for _, p in pairs(repl.pending) do
+      if p.running then p.parts = { { kind = "running", text = "running…" } } end
+    end
+    vim.schedule(function() for _, p in pairs(repl.pending) do repl_render(p) end end)
+    return
+  end
+  if m.type == "fatal" then
+    repl_fail(m.text or "kernel error")
+    return
+  end
+  local p = repl.pending[m.id]
+  if not p then return end
+  if m.type == "done" then
+    if p.running and #p.parts <= 1 then p.parts = { { kind = "ok", text = "✓ (no output)" } } end
+    p.running = false
+    repl.pending[m.id] = nil
+  else
+    if p.running then p.parts = {}; p.running = false end -- drop the "running…" placeholder
+    p.parts[#p.parts + 1] = { kind = m.type, text = m.text or "" }
+  end
+  vim.schedule(function() repl_render(p) end)
+end
+
+local function repl_on_stdout(_, data)
+  if not data then return end
+  data[1] = repl.acc .. data[1]
+  repl.acc = table.remove(data) or ""
+  for _, line in ipairs(data) do repl_process(line) end
+end
+
+local function repl_ensure()
+  if repl.job and repl.job > 0 then return true end
+  local venv = venv_for(0)
+  local py = venv and (venv .. (is_windows and "/Scripts/python.exe" or "/bin/python")) or "python3"
+  if vim.system({ py, "-c", "import ipykernel" }, { text = true }):wait().code ~= 0 then
+    vim.notify("Python REPL needs ipykernel in the active venv:\n  uv pip install ipykernel", vim.log.levels.WARN)
+    return false
+  end
+  local daemon = vim.fs.joinpath(vim.fn.stdpath("config"), "python", "jrepl.py")
+  repl.ready, repl.queue, repl.acc, repl.stderr = false, {}, "", ""
+  repl.job = vim.fn.jobstart({ py, daemon }, {
+    on_stdout = repl_on_stdout,
+    on_stderr = function(_, d)
+      local s = d and vim.trim(table.concat(d, "\n")) or ""
+      if s ~= "" then repl.stderr = (repl.stderr .. "\n" .. s):sub(-600) end
+    end,
+    on_exit = function()
+      local hanging = false
+      for _, p in pairs(repl.pending) do if p.running then hanging = true end end
+      repl.job, repl.ready, repl.queue = nil, false, {}
+      -- a daemon that dies while a send is still "starting/running" must not
+      -- leave that placeholder stuck — surface why (kernel start usually)
+      if hanging then repl_fail("kernel exited" .. (repl.stderr ~= "" and ("\n" .. repl.stderr) or "")) end
+    end,
+  })
+  if repl.job <= 0 then
+    repl.job = nil
+    vim.notify("Python REPL: failed to launch kernel daemon", vim.log.levels.ERROR)
+    return false
+  end
+  -- no notify here: the inline "starting kernel… → running…" placeholder under
+  -- the code already shows status, and a notify would linger in the message bar
+  return true
+end
+
+-- Hook the buffer so an output clears ONLY when an edit touches the code lines
+-- that produced it. Editing elsewhere — e.g. opening a line just below the
+-- output — leaves it in place. on_lines just reads/deletes extmarks (no text
+-- change), and deletions are scheduled to stay off the fast path.
+local function repl_attach(buf)
+  if repl.attached[buf] then return end
+  repl.attached[buf] = true
+  vim.api.nvim_buf_attach(buf, false, {
+    on_lines = function(_, b, _, first, last_old, last_new)
+      local change_end = math.max(last_old, last_new)
+      for id, m in pairs(repl.placed) do
+        if m.buf == b then
+          local pos = vim.api.nvim_buf_get_extmark_by_id(b, repl_ns, id, {})
+          local row = pos and pos[1]
+          if not row then
+            repl.placed[id] = nil
+          elseif first <= row and change_end > row - m.span then -- edit hit the code block
+            repl.placed[id], repl.pending[id] = nil, nil
+            vim.schedule(function() pcall(vim.api.nvim_buf_del_extmark, b, repl_ns, id) end)
+          end
+        end
+      end
+    end,
+    on_detach = function(_, b) repl.attached[b] = nil end,
+  })
+end
+
+local function repl_send(buf, s, e)
+  local lines = vim.api.nvim_buf_get_lines(buf, s - 1, e, false)
+  local code_lines = {}
+  for _, l in ipairs(lines) do -- drop ``` / ~~~ fences (safe inside a markdown block)
+    if not l:match("^%s*```") and not l:match("^%s*~~~") then code_lines[#code_lines + 1] = l end
+  end
+  -- dedent the common leading whitespace so indented blocks run standalone
+  local min
+  for _, l in ipairs(code_lines) do
+    if not l:match("^%s*$") then
+      local w = #l:match("^%s*")
+      if not min or w < min then min = w end
+    end
+  end
+  if min and min > 0 then
+    for i, l in ipairs(code_lines) do code_lines[i] = l:sub(min + 1) end
+  end
+  local code = table.concat(code_lines, "\n")
+  if vim.trim(code) == "" then return end
+  if not repl_ensure() then return end
+  repl.seq = repl.seq + 1
+  local id = repl.seq
+  local p = { id = id, buf = buf, row = e - 1, running = true,
+    parts = { { kind = "running", text = repl.ready and "running…" or "starting kernel…" } } }
+  repl.pending[id] = p
+  repl.placed[id] = { buf = buf, span = e - s } -- code occupies [anchorRow - span .. anchorRow]
+  repl_attach(buf)
+  repl_render(p)
+  local payload = vim.json.encode({ id = id, code = code }) .. "\n"
+  if repl.ready then vim.fn.chansend(repl.job, payload) else repl.queue[#repl.queue + 1] = payload end
+end
+
+local function repl_run_visual()
+  local buf = vim.api.nvim_get_current_buf()
+  local s, e = vim.fn.line("v"), vim.fn.line(".")
+  if s > e then s, e = e, s end
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
+  repl_send(buf, s, e)
+end
+
+-- In a markdown buffer, find the ```python / ```py fence enclosing the cursor;
+-- returns the body's 1-indexed [start, end] (between the fences), or nil.
+local function md_python_block(buf, cur)
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local open, lang
+  for i, l in ipairs(lines) do
+    if l:match("^%s*```") or l:match("^%s*~~~") then
+      if not open then
+        open, lang = i, (l:match("^%s*[`~]+%s*(%S+)") or ""):lower()
+      else
+        if (lang == "python" or lang == "py") and cur >= open and cur <= i then
+          return open + 1, i - 1
+        end
+        open, lang = nil, nil
+      end
+    end
+  end
+end
+
+local function repl_run_paragraph()
+  local buf = vim.api.nvim_get_current_buf()
+  local cur, last = vim.fn.line("."), vim.fn.line("$")
+  if (vim.bo[buf].filetype or ""):match("markdown") then
+    local s, e = md_python_block(buf, cur)
+    if not s then
+      vim.notify("Not inside a ```python code block", vim.log.levels.WARN)
+      return
+    end
+    repl_send(buf, s, e)
+    return
+  end
+  local s, e = cur, cur
+  if not vim.fn.getline(cur):match("^%s*$") then
+    while s > 1 and not vim.fn.getline(s - 1):match("^%s*$") do s = s - 1 end
+    while e < last and not vim.fn.getline(e + 1):match("^%s*$") do e = e + 1 end
+  end
+  repl_send(buf, s, e)
+end
+
+local function repl_clear(buf)
+  buf = buf or vim.api.nvim_get_current_buf()
+  vim.api.nvim_buf_clear_namespace(buf, repl_ns, 0, -1)
+  for id, p in pairs(repl.pending) do if p.buf == buf then repl.pending[id] = nil end end
+  for id, m in pairs(repl.placed) do if m.buf == buf then repl.placed[id] = nil end end
+end
+
+map("x", "<leader>r", repl_run_visual, { desc = "Python REPL: run selection" })
+-- normal-mode run is <leader>rr (not bare <leader>r) so it doesn't wait
+-- timeoutlen for the rc/rk siblings; visual <leader>r has no siblings, stays snappy
+map("n", "<leader>rr", repl_run_paragraph, { desc = "Python REPL: run paragraph" })
+map("n", "<leader>rc", function() repl_clear() end, { desc = "Python REPL: clear outputs" })
+map("n", "<leader>rk", function()
+  repl_clear()
+  if repl.job and repl.job > 0 then
+    vim.fn.chansend(repl.job, vim.json.encode({ id = 0, restart = true }) .. "\n")
+    vim.notify("Python kernel restarted (fresh state)", vim.log.levels.INFO)
+  else
+    vim.notify("No Python kernel running", vim.log.levels.INFO)
+  end
+end, { desc = "Python REPL: restart kernel" })
 
 -- ---------------------------------------------------------------------------
 -- LSP: ty (Astral type checker) + ruff (lint / format / code actions)
