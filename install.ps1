@@ -98,6 +98,17 @@ if (Have uv) {
 }
 
 # ---------------------------------------------------------------------------
+# 2b. Rust: rust-analyzer (LSP) + rustfmt + clippy via rustup. Optional — the
+# editor only enables rust-analyzer when it's on PATH.
+# ---------------------------------------------------------------------------
+if (Have rustup) {
+  Info "Adding rust-analyzer + rustfmt + clippy…"
+  try { rustup component add rust-analyzer rustfmt clippy } catch { Warn "couldn't add Rust components" }
+} else {
+  Warn "rustup not found — skipping Rust tooling. Install from https://rustup.rs then run: rustup component add rust-analyzer rustfmt clippy"
+}
+
+# ---------------------------------------------------------------------------
 # 3. Fetch the config into %LOCALAPPDATA%\nvim
 # ---------------------------------------------------------------------------
 if (Test-Path (Join-Path $ConfigDir ".git")) {
@@ -134,7 +145,7 @@ nvim --headless "+qa"
 # Idempotent: only compile parsers that are MISSING, so updates skip the slow compile.
 $dataHome = if ($env:XDG_DATA_HOME) { $env:XDG_DATA_HOME } else { Join-Path $env:LOCALAPPDATA "nvim-data" }
 $parserDir = Join-Path $dataHome "site\pack\core\opt\nvim-treesitter\parser"
-$want = @("python","lua","vim","vimdoc","bash","json","yaml","toml","markdown","markdown_inline")
+$want = @("python","rust","lua","vim","vimdoc","bash","json","yaml","toml","markdown","markdown_inline")
 $missing = $want | Where-Object { -not (Test-Path (Join-Path $parserDir "$_.so")) }
 if ($missing.Count -gt 0) {
   Info ("Compiling Treesitter parsers (needs a C compiler): " + ($missing -join " "))

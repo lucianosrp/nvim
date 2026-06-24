@@ -170,7 +170,7 @@ local ok_ts, tsconfigs = pcall(require, "nvim-treesitter.configs")
 if ok_ts then
   tsconfigs.setup({
     ensure_installed = {
-      "python", "lua", "vim", "vimdoc", "bash",
+      "python", "rust", "lua", "vim", "vimdoc", "bash",
       "json", "yaml", "toml", "markdown", "markdown_inline",
     },
     auto_install = true,           -- compile a missing parser on first open (uses gcc)
@@ -1210,7 +1210,9 @@ map("n", "<leader>rk", function()
 end, { desc = "Python REPL: restart kernel" })
 
 -- ---------------------------------------------------------------------------
--- LSP: ty (Astral type checker) + ruff (lint / format / code actions)
+-- LSP: ty + ruff (Python), rust-analyzer (Rust). Servers are only *enabled*
+-- when their binary is installed, so a machine without the toolchain opens
+-- .py/.rs files cleanly instead of erroring with "command not found".
 -- ---------------------------------------------------------------------------
 vim.lsp.config("ty", {
   cmd = { "ty", "server" },
@@ -1224,7 +1226,46 @@ vim.lsp.config("ruff", {
   root_markers = { "pyproject.toml", "ruff.toml", ".ruff.toml", ".git" },
 })
 
-vim.lsp.enable({ "ty", "ruff" })
+-- Locate a runnable rust-analyzer. Prefer it on PATH; otherwise find the rustup
+-- toolchain binary directly (some rustup installs — e.g. Arch's system package —
+-- ship no rust-analyzer proxy on PATH). Glob, not `rustup which`, to keep zero
+-- subprocess cost at startup. nil ⇒ Rust LSP simply stays off.
+local function find_rust_analyzer()
+  if vim.fn.executable("rust-analyzer") == 1 then return { "rust-analyzer" } end
+  if vim.fn.executable("rustup") == 1 then
+    local home = vim.env.RUSTUP_HOME or ((vim.env.HOME or "") .. "/.rustup")
+    local hits = vim.fn.glob(home .. "/toolchains/*/bin/rust-analyzer", true, true)
+    for _, h in ipairs(hits) do
+      if h:find("stable", 1, true) then return { h } end -- prefer the stable toolchain
+    end
+    if hits[1] then return { hits[1] } end
+  end
+end
+local ra_cmd = find_rust_analyzer()
+
+-- Rust: rust-analyzer with clippy-on-save (richer lints than `cargo check`),
+-- proc-macro support, and all cargo features. Inlay hints are turned on per
+-- buffer in LspAttach below (toggle with <leader>uh).
+vim.lsp.config("rust_analyzer", {
+  cmd = ra_cmd or { "rust-analyzer" },
+  filetypes = { "rust" },
+  root_markers = { "Cargo.toml", "rust-project.json", ".git" },
+  settings = {
+    ["rust-analyzer"] = {
+      check = { command = "clippy" },
+      cargo = { allFeatures = true },
+      procMacro = { enable = true },
+    },
+  },
+})
+
+-- Enable a server only when its tool is actually present — otherwise opening a
+-- .py/.rs file errors with "command not found" on a machine without the tool.
+local lsp_on = {}
+if vim.fn.executable("ty") == 1 then lsp_on[#lsp_on + 1] = "ty" end
+if vim.fn.executable("ruff") == 1 then lsp_on[#lsp_on + 1] = "ruff" end
+if ra_cmd then lsp_on[#lsp_on + 1] = "rust_analyzer" end
+if #lsp_on > 0 then vim.lsp.enable(lsp_on) end
 
 -- ---------------------------------------------------------------------------
 -- Hover cleanup: ty (and others) emit docstrings containing HTML entities
@@ -1282,6 +1323,11 @@ vim.api.nvim_create_autocmd("LspAttach", {
       vim.lsp.completion.enable(true, client.id, bufnr, { autotrigger = true })
     end
 
+    -- Inlay hints (inferred types / param names) for Rust — toggle with <leader>uh.
+    if client and client.name == "rust_analyzer" and client:supports_method("textDocument/inlayHint") then
+      vim.lsp.inlay_hint.enable(true, { bufnr = bufnr })
+    end
+
     local function bmap(lhs, rhs, desc)
       vim.keymap.set("n", lhs, rhs, { buffer = bufnr, desc = desc })
     end
@@ -1321,9 +1367,30 @@ vim.api.nvim_create_autocmd("BufWritePre", {
   end,
 })
 
+-- Format Rust on save with rustfmt (via rust-analyzer). No-ops if the server
+-- didn't attach (toolchain absent), so it's naturally gated like the Python one.
+vim.api.nvim_create_autocmd("BufWritePre", {
+  group = aug,
+  pattern = "*.rs",
+  callback = function(args)
+    if vim.b[args.buf].large_file then return end
+    vim.lsp.buf.format({
+      bufnr = args.buf,
+      async = false,
+      filter = function(c) return c.name == "rust_analyzer" end,
+    })
+  end,
+})
+
 -- ---------------------------------------------------------------------------
 -- General keymaps
 -- ---------------------------------------------------------------------------
+-- Toggle inlay hints (on by default for Rust; useful to silence them briefly)
+map("n", "<leader>uh", function()
+  local on = vim.lsp.inlay_hint.is_enabled({ bufnr = 0 })
+  vim.lsp.inlay_hint.enable(not on, { bufnr = 0 })
+  vim.notify("Inlay hints " .. (on and "off" or "on"), vim.log.levels.INFO)
+end, { desc = "Toggle inlay hints" })
 map("n", "<leader>w", "<cmd>write<cr>", { desc = "Save" })
 -- Close the current buffer but KEEP the window/split (plain :bd closes the
 -- split — or quits nvim — on your last buffer). Refuses if there are unsaved

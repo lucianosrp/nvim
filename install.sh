@@ -148,6 +148,22 @@ uv tool install ty   >/dev/null 2>&1 || uv tool upgrade ty   || warn "ty install
 uv tool install ruff >/dev/null 2>&1 || uv tool upgrade ruff || warn "ruff install failed (Python lint/format unavailable)"
 
 # ---------------------------------------------------------------------------
+# 4b. Rust: rust-analyzer (LSP) + rustfmt (format) + clippy (lints), via rustup.
+# The editor enables rust-analyzer only when it's on PATH, so this is optional.
+# ---------------------------------------------------------------------------
+if ! have rustup; then
+  info "Installing rustup (Rust toolchain)…"
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path \
+    || warn "rustup install failed (Rust tooling unavailable)"
+  export PATH="$HOME/.cargo/bin:$PATH"
+fi
+if have rustup; then
+  info "Adding rust-analyzer + rustfmt + clippy…"
+  rustup component add rust-analyzer rustfmt clippy >/dev/null 2>&1 \
+    || warn "couldn't add Rust components (rust-analyzer/rustfmt/clippy)"
+fi
+
+# ---------------------------------------------------------------------------
 # 5. Fetch the config into ~/.config/nvim
 # ---------------------------------------------------------------------------
 if [ -d "$CONFIG_DIR/.git" ]; then
@@ -187,7 +203,7 @@ nvim --headless "+qa" >/dev/null 2>&1 || true
 
 PARSER_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/site/pack/core/opt/nvim-treesitter/parser"
 MISSING=""
-for p in python lua vim vimdoc bash json yaml toml markdown markdown_inline; do
+for p in python rust lua vim vimdoc bash json yaml toml markdown markdown_inline; do
   [ -f "$PARSER_DIR/$p.so" ] || MISSING="$MISSING $p"
 done
 if [ -n "$MISSING" ]; then
