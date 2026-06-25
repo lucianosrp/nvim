@@ -128,7 +128,7 @@ of every mapping.
 | `gr` | References (fzf) · `K` Hover |
 | `<leader>rn` `<leader>ca` `<leader>F` | Rename / code action / format |
 | `[d` `]d` `<leader>d` | Prev / next / show line diagnostic |
-| `<leader>uh` | Toggle inlay hints (on by default for Rust) |
+| `<leader>uh` | Toggle inlay hints (on for any LSP that provides them — ty, rust-analyzer, lua_ls) |
 | `<leader>l` | LSP status / debug — floating window (toggle) |
 
 Python and Rust **format on save** (ruff / rustfmt). Each LSP is enabled only
