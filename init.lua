@@ -1653,7 +1653,11 @@ local function lsp_dashboard(buf)
     add({})
   end
 
-  add({ { "  r", "Function" }, { " restart LSP   ", "Comment" }, { "q", "Function" }, { " close", "Comment" } })
+  add({
+    { "  r", "Function" }, { " restart   ", "Comment" },
+    { "c", "Function" }, { " copy errors   ", "Comment" },
+    { "q", "Function" }, { " close", "Comment" },
+  })
   return lines, marks
 end
 
@@ -1717,6 +1721,17 @@ local function toggle_lsp_status()
         lsp_status_render(b, src)
       end
     end, 800)
+  end, opts)
+  vim.keymap.set("n", "c", function() -- copy recent log errors to the clipboard
+    local errs = lsp_tail_errors(lsp_log_path(), 30)
+    if #errs == 0 then
+      vim.notify("No recent LSP log errors", vim.log.levels.INFO)
+      return
+    end
+    local text = table.concat(errs, "\n")
+    vim.fn.setreg("+", text) -- system clipboard (OSC 52 over SSH)
+    vim.fn.setreg('"', text)
+    vim.notify(("Copied %d LSP log error line(s)"):format(#errs), vim.log.levels.INFO)
   end, opts)
 end
 map("n", "<leader>l", toggle_lsp_status, { desc = "LSP status / debug (float)" })
