@@ -135,7 +135,8 @@ Python and Rust **format on save** (ruff / rustfmt). Each LSP is enabled only
 when its tool is installed. **`<leader>l`** opens a panel showing what's attached
 to the buffer, every running client, which configured servers are present (and
 the install command for any that aren't), debug steps, and a tail of recent log
-errors. All floating windows (hover `K`, signature, diagnostics, this panel)
+errors. Press **`r`** in the panel to restart the buffer's LSP clients, `q` to
+close. All floating windows (hover `K`, signature, diagnostics, this panel)
 carry a thin rounded border.
 
 ### Python REPL (inline, ephemeral)
