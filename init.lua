@@ -1556,6 +1556,21 @@ local function lsp_log_path()
   return vim.fn.stdpath("log") .. "/lsp.log"
 end
 
+-- Neovim logs EVERYTHING a server prints to stderr at [ERROR] level, so the log
+-- is full of benign INFO/WARN banners ("Python version: 3.12", "Server shut
+-- down", the file-watching warning, …). Keep only lines that look like a real
+-- failure — non-stderr RPC/protocol errors, or stderr whose payload mentions a
+-- hard fault (panic/traceback/exception/fatal/error:).
+local function lsp_is_real_error(line)
+  if not line:find("[ERROR]", 1, true) then return false end
+  if line:find('"stderr"', 1, true) then
+    local low = line:lower()
+    return low:find("panic") or low:find("traceback") or low:find("exception")
+      or low:find("fatal") or low:find("error:") or low:find("errored") or false
+  end
+  return true
+end
+
 local function lsp_tail_errors(path, n)
   local f = io.open(path, "r")
   if not f then return {} end
@@ -1565,7 +1580,7 @@ local function lsp_tail_errors(path, n)
   f:close()
   local errs = {}
   for line in chunk:gmatch("[^\n]+") do
-    if line:find("ERROR", 1, true) then errs[#errs + 1] = line end
+    if lsp_is_real_error(line) then errs[#errs + 1] = line end
   end
   local out = {}
   for i = math.max(1, #errs - n + 1), #errs do out[#out + 1] = errs[i] end
@@ -1575,7 +1590,7 @@ end
 -- Build the dashboard as (lines, marks): each row is a list of {text, hl?}
 -- segments, so we get aligned columns with coloured status glyphs — not markdown.
 local lsp_status_ns = vim.api.nvim_create_namespace("lsp_status")
-local function lsp_dashboard()
+local function lsp_dashboard(buf)
   local lines, marks = {}, {}
   local function add(segs)
     local text, col = "", 0
@@ -1589,7 +1604,7 @@ local function lsp_dashboard()
   local function trunc(s, n) s = s or ""; return vim.fn.strchars(s) > n and (s:sub(1, n - 1) .. "…") or s end
   local function header(label) add({ { "  " }, { label, "Title" } }) end
 
-  local buf = vim.api.nvim_get_current_buf()
+  buf = buf or vim.api.nvim_get_current_buf()
   local running = {}
   for _, c in ipairs(vim.lsp.get_clients()) do running[c.name] = c.id end
 
@@ -1641,7 +1656,6 @@ local function lsp_dashboard()
   kv("open", ":lua vim.cmd.edit(vim.lsp.log.get_filename())")
   kv("verbose", ":lua vim.lsp.set_log_level('debug')")
   kv("health", ":checkhealth vim.lsp")
-  kv("restart", ":lua vim.lsp.stop_client(vim.lsp.get_clients({bufnr=0}))")
   add({})
 
   -- Recent errors, if any
@@ -1654,8 +1668,43 @@ local function lsp_dashboard()
     add({})
   end
 
-  add({ { "  q", "Function" }, { " close", "Comment" } })
+  add({
+    { "  r", "Function" }, { " restart   ", "Comment" },
+    { "c", "Function" }, { " copy errors   ", "Comment" },
+    { "q", "Function" }, { " close", "Comment" },
+  })
   return lines, marks
+end
+
+local function lsp_status_render(b, src)
+  local lines, marks = lsp_dashboard(src)
+  vim.bo[b].modifiable = true
+  vim.api.nvim_buf_set_lines(b, 0, -1, false, lines)
+  vim.api.nvim_buf_clear_namespace(b, lsp_status_ns, 0, -1)
+  for _, m in ipairs(marks) do
+    pcall(vim.api.nvim_buf_set_extmark, b, lsp_status_ns, m[1], m[2], { end_col = m[3], hl_group = m[4] })
+  end
+  vim.bo[b].modifiable = false
+  return #lines
+end
+
+-- Restart the LSP clients on a buffer: stop them, then re-attach. Reloading the
+-- buffer (:edit) re-runs BufReadPost/FileType and reliably brings fresh clients
+-- up; for an unsaved buffer (can't reload) we re-fire FileType instead.
+local function lsp_restart(src)
+  if not (src and vim.api.nvim_buf_is_valid(src)) then return end
+  local clients = vim.lsp.get_clients({ bufnr = src })
+  for _, c in ipairs(clients) do c:stop() end
+  vim.notify(#clients > 0 and ("Restarting " .. #clients .. " LSP client(s)…") or "No LSP clients on that buffer",
+    vim.log.levels.INFO)
+  vim.defer_fn(function()
+    if not vim.api.nvim_buf_is_valid(src) then return end
+    if vim.bo[src].modified then
+      vim.api.nvim_exec_autocmds("FileType", { buffer = src })
+    else
+      vim.api.nvim_buf_call(src, function() vim.cmd("silent! edit") end)
+    end
+  end, 300)
 end
 
 local function toggle_lsp_status()
@@ -1665,24 +1714,40 @@ local function toggle_lsp_status()
     _G.__lsp_status_win = nil
     return
   end
-  local lines, marks = lsp_dashboard()
+  local src = vim.api.nvim_get_current_buf() -- the buffer we came from (for restart + status)
   local b = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(b, 0, -1, false, lines)
-  for _, m in ipairs(marks) do
-    pcall(vim.api.nvim_buf_set_extmark, b, lsp_status_ns, m[1], m[2], { end_col = m[3], hl_group = m[4] })
-  end
-  vim.bo[b].modifiable = false
   vim.bo[b].bufhidden = "wipe"
+  local nlines = lsp_status_render(b, src)
   local width = 64
-  local height = math.min(#lines, math.floor(vim.o.lines * 0.85))
+  local height = math.min(nlines, math.floor(vim.o.lines * 0.85))
   _G.__lsp_status_win = vim.api.nvim_open_win(b, true, {
     relative = "editor", width = width, height = height,
     col = math.floor((vim.o.columns - width) / 2), row = math.floor((vim.o.lines - height) / 2),
     style = "minimal", border = "rounded", title = " status ", title_pos = "center",
   })
   vim.wo[_G.__lsp_status_win].cursorline = true
-  vim.keymap.set("n", "q", "<cmd>close<cr>", { buffer = b, nowait = true })
-  vim.keymap.set("n", "<Esc>", "<cmd>close<cr>", { buffer = b, nowait = true })
+  local opts = { buffer = b, nowait = true }
+  vim.keymap.set("n", "q", "<cmd>close<cr>", opts)
+  vim.keymap.set("n", "<Esc>", "<cmd>close<cr>", opts)
+  vim.keymap.set("n", "r", function()
+    lsp_restart(src)
+    vim.defer_fn(function() -- refresh once clients have re-attached
+      if _G.__lsp_status_win and vim.api.nvim_win_is_valid(_G.__lsp_status_win) and vim.api.nvim_buf_is_valid(b) then
+        lsp_status_render(b, src)
+      end
+    end, 800)
+  end, opts)
+  vim.keymap.set("n", "c", function() -- copy recent log errors to the clipboard
+    local errs = lsp_tail_errors(lsp_log_path(), 30)
+    if #errs == 0 then
+      vim.notify("No recent LSP log errors", vim.log.levels.INFO)
+      return
+    end
+    local text = table.concat(errs, "\n")
+    vim.fn.setreg("+", text) -- system clipboard (OSC 52 over SSH)
+    vim.fn.setreg('"', text)
+    vim.notify(("Copied %d LSP log error line(s)"):format(#errs), vim.log.levels.INFO)
+  end, opts)
 end
 map("n", "<leader>l", toggle_lsp_status, { desc = "LSP status / debug (float)" })
 
