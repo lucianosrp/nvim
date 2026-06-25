@@ -1556,6 +1556,21 @@ local function lsp_log_path()
   return vim.fn.stdpath("log") .. "/lsp.log"
 end
 
+-- Neovim logs EVERYTHING a server prints to stderr at [ERROR] level, so the log
+-- is full of benign INFO/WARN banners ("Python version: 3.12", "Server shut
+-- down", the file-watching warning, …). Keep only lines that look like a real
+-- failure — non-stderr RPC/protocol errors, or stderr whose payload mentions a
+-- hard fault (panic/traceback/exception/fatal/error:).
+local function lsp_is_real_error(line)
+  if not line:find("[ERROR]", 1, true) then return false end
+  if line:find('"stderr"', 1, true) then
+    local low = line:lower()
+    return low:find("panic") or low:find("traceback") or low:find("exception")
+      or low:find("fatal") or low:find("error:") or low:find("errored") or false
+  end
+  return true
+end
+
 local function lsp_tail_errors(path, n)
   local f = io.open(path, "r")
   if not f then return {} end
@@ -1565,7 +1580,7 @@ local function lsp_tail_errors(path, n)
   f:close()
   local errs = {}
   for line in chunk:gmatch("[^\n]+") do
-    if line:find("ERROR", 1, true) then errs[#errs + 1] = line end
+    if lsp_is_real_error(line) then errs[#errs + 1] = line end
   end
   local out = {}
   for i = math.max(1, #errs - n + 1), #errs do out[#out + 1] = errs[i] end
