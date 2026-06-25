@@ -1484,8 +1484,9 @@ vim.api.nvim_create_autocmd("LspAttach", {
       vim.lsp.completion.enable(true, client.id, bufnr, { autotrigger = true })
     end
 
-    -- Inlay hints (inferred types / param names) for Rust — toggle with <leader>uh.
-    if client and client.name == "rust_analyzer" and client:supports_method("textDocument/inlayHint") then
+    -- Inlay hints (inferred types / param names) for any server that does them
+    -- — rust-analyzer, ty, lua_ls, … — toggle per buffer with <leader>uh.
+    if client and client:supports_method("textDocument/inlayHint") then
       vim.lsp.inlay_hint.enable(true, { bufnr = bufnr })
     end
 
@@ -1688,7 +1689,7 @@ map("n", "<leader>l", toggle_lsp_status, { desc = "LSP status / debug (float)" }
 -- ---------------------------------------------------------------------------
 -- General keymaps
 -- ---------------------------------------------------------------------------
--- Toggle inlay hints (on by default for Rust; useful to silence them briefly)
+-- Toggle inlay hints (on by default for any LSP that provides them)
 map("n", "<leader>uh", function()
   local on = vim.lsp.inlay_hint.is_enabled({ bufnr = 0 })
   vim.lsp.inlay_hint.enable(not on, { bufnr = 0 })
