@@ -21,8 +21,10 @@ This repo **is** the Neovim config — it clones directly into `~/.config/nvim`.
   clipboard → perf → options → diagnostics → plugins → setup/keymaps → venv →
   LSP → hover → autocmds → theme → hot-reload).
 - `colors/teal.lua` — house colorscheme (the default). `colors/dank.lua` —
-  DankMaterialShell-driven scheme; silently falls back to teal when DMS's
-  `lua/plugins/dankcolors.lua` is absent (so the config stays portable).
+  matugen/DMS-driven scheme: reads the generated Material palette
+  (`~/.local/state/quickshell/user/generated/colors.json`) and maps its roles
+  onto the teal structure, live-reloading on change; silently falls back to
+  teal when the palette is absent (so the config stays portable).
 - `install.sh` — Linux/macOS installer (multi-distro deps + uv/ty/ruff + **git
   clone** the config + compile parsers). `install.ps1` — Windows (winget/scoop).
 - `queries/markdown*/injections.scm` — empty overrides; see Gotchas.
@@ -45,7 +47,7 @@ This repo **is** the Neovim config — it clones directly into `~/.config/nvim`.
   (wl-clipboard/native locally, OSC 52 over SSH, native on Windows); themes and
   Python LSPs degrade gracefully when their tools/files are absent.
 - **Minimal plugins.** Four core (fzf-lua, treesitter, gitsigns, diffview) +
-  opt-in extras (kanagawa, base16 for `dank`, devicons). A new one needs real
+  opt-in extras (kanagawa, devicons). A new one needs real
   justification against the speed goal; always prefer a built-in.
 - **Preserve the look:** transparent UI for any scheme via the `transparent()`
   autocmd on `ColorScheme`; per-theme colors live in `colors/*.lua`.
