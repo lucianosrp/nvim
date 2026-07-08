@@ -7,6 +7,24 @@
 -- No plugin-manager framework: the single plugin is managed by built-in vim.pack.
 -- ============================================================================
 
+-- Hard floor: everything below assumes Neovim >= 0.12 (vim.pack, vim.uv,
+-- vim.lsp.enable, completeopt=fuzzy, ...). On an older nvim — typically a stale
+-- distro /usr/bin/nvim shadowing the real one on PATH — loading this file would
+-- die mid-chunk with a cryptic E5113 and leave the editor half-configured.
+-- Bail out early with one clear message instead. Only 0.8-safe APIs here.
+if vim.fn.has("nvim-0.12") == 0 then
+  vim.schedule(function()
+    local v = vim.version()
+    vim.notify(
+      ("This config needs Neovim >= 0.12; this is %d.%d.%d (%s).\n"
+        .. "An old system nvim is probably shadowing the right one on PATH — check `which nvim`.")
+        :format(v.major, v.minor, v.patch, vim.v.progpath),
+      vim.log.levels.ERROR
+    )
+  end)
+  return
+end
+
 -- Enable the Lua module bytecode cache FIRST — biggest single startup win.
 -- Guarded: an old/odd nvim build without vim.loader must not abort the whole config.
 if vim.loader then vim.loader.enable() end
