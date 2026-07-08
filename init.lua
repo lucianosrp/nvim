@@ -220,21 +220,19 @@ if ok_ts then
   })
 end
 
--- Markdown: Treesitter-powered folding on sections (headers) and fenced code
--- blocks. Opens fully unfolded (high foldlevel) so nothing is hidden on load;
--- za/zc/zo to toggle, zR/zM to open/close all. Skipped on big files (the >1 MB
--- guard sets foldmethod=manual). Code-fence language highlighting comes from the
--- minimal queries/markdown/injections.scm override (the bundled query crashes 0.12).
-vim.api.nvim_create_autocmd("FileType", {
-  group = aug,
-  pattern = "markdown",
-  callback = function(args)
-    if vim.b[args.buf].large_file then return end
-    vim.opt_local.foldmethod = "expr"
-    vim.opt_local.foldexpr = "v:lua.vim.treesitter.foldexpr()"
-    vim.opt_local.foldlevel = 99
-  end,
-})
+-- Folding: Treesitter-powered, for EVERY language with a parser — functions/
+-- classes/blocks in code, sections (headers) and fenced code blocks in
+-- markdown. Opens fully unfolded (high foldlevel) so nothing is hidden on
+-- load; za/zc/zo to toggle, zR/zM to open/close all. Buffers without a parser
+-- get no folds (the foldexpr returns 0 everywhere) — zc there is a no-op, use
+-- manual :set foldmethod if ever needed. Skipped on big files (the >1 MB guard
+-- sets foldmethod=manual). Markdown code-fence language highlighting comes from
+-- the minimal queries/markdown/injections.scm override (bundled query crashes 0.12).
+o.foldmethod = "expr"
+o.foldexpr = "v:lua.vim.treesitter.foldexpr()"
+o.foldlevel = 99
+o.foldlevelstart = 99
+o.foldtext = "" -- keep the folded line's own syntax highlighting (0.10+)
 
 -- File-type icons for fzf-lua pickers (guarded by the Nerd Font flag above).
 if vim.g.have_nerd_font then

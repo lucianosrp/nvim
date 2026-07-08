@@ -157,10 +157,14 @@ it** — adding a line just below it leaves it in place. In a **Markdown** file,
 just say so. No plugin — a tiny stdio daemon (`python/jrepl.py`) runs in the venv
 python and Neovim only renders.
 
+### Folding
+Treesitter-powered, in **every language with a parser**: fold functions,
+classes and blocks in code; sections (headers) and code fences in Markdown —
+`za`/`zo`/`zc` to toggle a fold, `zR`/`zM` to open/close all. Files open
+fully unfolded, and the folded line keeps its syntax highlighting.
+
 ### Markdown
-Fenced code blocks are highlighted in their own language (```python`, ```lua`, …)
-and folding is on by sections (headers) and code fences — `za`/`zo`/`zc` to
-toggle a fold, `zR`/`zM` to open/close all. Files open fully unfolded.
+Fenced code blocks are highlighted in their own language (```python`, ```lua`, …).
 
 ### Git
 | Key | Action |
