@@ -181,13 +181,9 @@ local plugins = {
   -- Kanagawa theme --
   { src = "https://github.com/rebelot/kanagawa.nvim" },
 }
--- DankMaterialShell integration (auto-discovered, optional): only pull in the
--- base16 engine when DMS's generated theme is actually present on this machine.
--- On a system without DMS there's no dependency, and the "dank" scheme silently
--- falls back to teal — the config stays fully agnostic.
-if vim.uv.fs_stat(vim.fn.stdpath("config") .. "/lua/plugins/dankcolors.lua") then
-  table.insert(plugins, { src = "https://github.com/RRethy/base16-nvim" })
-end
+-- DankMaterialShell/matugen integration needs no plugin: colors/dank.lua reads
+-- the generated Material palette (colors.json) directly and falls back to teal
+-- when it's absent — the config stays fully agnostic with zero extra deps.
 -- File-type icons (fzf-lua pickers etc.) — only meaningful with a Nerd Font.
 if vim.g.have_nerd_font then
   table.insert(plugins, { src = "https://github.com/nvim-tree/nvim-web-devicons" })
@@ -297,9 +293,9 @@ map("n", "<leader>gs", function()
 end, { desc = "Git status (changed files)" })
 map("n", "<leader>?", fzf_cmd("helptags"), { desc = "Help tags" })
 map("n", "<leader>k", fzf_cmd("keymaps"), { desc = "Keymaps cheatsheet" })
--- Colorscheme picker, minus base16-nvim's ~100 bundled `base16-*` schemes
--- (they're just the engine for `dank`; listing them is noise and they error
--- when the base16 module isn't loaded). Keeps fzf-lua's live preview.
+-- Colorscheme picker. `base16-*` stays filtered out: machines that installed
+-- the old base16-nvim engine (pre-plugin-free `dank`) may still have its ~100
+-- schemes on disk, and they error without the module. Keeps the live preview.
 map("n", "<leader>uc", function()
   local f = load_fzf()
   if f then f.colorschemes({ ignore_patterns = { "^base16" } }) end

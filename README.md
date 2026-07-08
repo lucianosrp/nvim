@@ -24,13 +24,12 @@ built-in `vim.pack` (Neovim 0.12+). No lazy.nvim, no Mason, no LazyVim.
 | Syntax colors | **nvim-treesitter** (`master`) | rich highlighting |
 | Git signs | **gitsigns.nvim** | add/change/delete + hunk ops |
 | Diff / PR review | **diffview.nvim** | Zed-style review, branch/PR-in-a-worktree |
-| Themes | `teal` (house), `dank` (DankMaterialShell-driven), **kanagawa** | transparent over any scheme |
+| Themes | `teal` (house), `dank` (matugen/DMS-driven, plugin-free), **kanagawa** | transparent over any scheme |
 | Icons | **nvim-web-devicons** | optional, gated on a Nerd Font |
 
 The four **core** plugins are fzf-lua, nvim-treesitter, gitsigns, and diffview.
-The rest are opt-in extras: `kanagawa` (a theme), `base16-nvim` (engine for the
-`dank` scheme), and `nvim-web-devicons` (file icons, only loaded when a Nerd Font
-is present).
+The rest are opt-in extras: `kanagawa` (a theme) and `nvim-web-devicons` (file
+icons, only loaded when a Nerd Font is present).
 
 ---
 
@@ -245,13 +244,13 @@ from the active scheme. Switch with **`<leader>uc`** (live preview).
 | Scheme | Notes |
 |--------|-------|
 | `teal` *(default)* | the house look — built-in `default` + teal accents (`colors/teal.lua`) |
-| `dank` | follows **DankMaterialShell**: loads DMS's generated `lua/plugins/dankcolors.lua` and live-reloads when DMS changes colors (`colors/dank.lua`) |
+| `dank` | follows **DankMaterialShell / matugen**: reads the generated Material You palette and maps its roles (primary → functions, tertiary → types, secondary → keywords, error → properties, …) onto the `teal` structure; live-reloads on wallpaper or light/dark change (`colors/dank.lua`) |
 | `kanagawa` | bundled example theme |
 
-`dank` integration touches nothing DMS owns — it just reads the file DMS already
-generates (when `matugenTemplateNeovim` is on) and re-applies on change. Where
-DMS isn't running (e.g. a server), it's a static snapshot of the synced palette,
-falling back to `teal` if the file is absent.
+`dank` integration touches nothing DMS owns and needs no plugin — it just reads
+the palette matugen already generates
+(`~/.local/state/quickshell/user/generated/colors.json`) and re-applies when it
+changes. On a machine without DMS it silently falls back to `teal`.
 
 To change the default, edit the `vim.cmd.colorscheme("teal")` line near the
 bottom of `init.lua`.
@@ -269,7 +268,7 @@ The repo **is** the config — it clones straight into `~/.config/nvim`:
 ├── install.ps1                  # Windows installer (winget/scoop)
 ├── colors/
 │   ├── teal.lua                 # house colorscheme (default)
-│   └── dank.lua                 # DankMaterialShell-driven scheme (→ teal if no DMS)
+│   └── dank.lua                 # matugen/DMS-driven scheme (→ teal if no DMS)
 ├── queries/
 │   ├── markdown/injections.scm        # query overrides (see Troubleshooting)
 │   └── markdown_inline/injections.scm
@@ -278,8 +277,9 @@ The repo **is** the config — it clones straight into `~/.config/nvim`:
 ```
 
 Two paths are **git-ignored** as per-machine state, not shipped:
-`nvim-pack-lock.json` (vim.pack lock) and `lua/plugins/dankcolors.lua` (written
-by DankMaterialShell's matugen integration when present).
+`nvim-pack-lock.json` (vim.pack lock) and `lua/plugins/dankcolors.lua` (a
+leftover DMS matugen template output; no longer read — `dank` uses DMS's
+`colors.json` directly).
 
 `init.lua` is intentionally a **single file**, read top to bottom:
 leader → clipboard → performance → options → diagnostics → **plugins** →
