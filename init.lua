@@ -1432,12 +1432,22 @@ local function find_ocamllsp()
 end
 local oc_cmd = find_ocamllsp()
 
+-- When ocamllsp came from a switch (nvim launched outside an `opam env` shell),
+-- the server's helpers — ocamlformat-rpc (pretty hover types), ocamlformat,
+-- dune — aren't on its PATH either. Prepend the switch's bin dir for the
+-- spawned server only; nvim's own environment is untouched.
+local oc_env
+if oc_cmd and oc_cmd[1] ~= "ocamllsp" then
+  oc_env = { PATH = vim.fs.dirname(oc_cmd[1]) .. ":" .. (vim.env.PATH or "") }
+end
+
 -- OCaml: ocamllsp (`opam install ocaml-lsp-server`), rooted at the dune project;
 -- also attaches to dune files themselves. Completion + inlay hints come from the
 -- shared LspAttach below. The `ocaml` Treesitter parser compiles on first open
 -- (auto_install), so OCaml — like Rust — stays fully optional.
 vim.lsp.config("ocamllsp", {
   cmd = oc_cmd or { "ocamllsp" },
+  cmd_env = oc_env,
   filetypes = { "ocaml", "ocaml.interface", "ocaml.menhir", "ocaml.ocamllex", "dune" },
   root_markers = { "dune-project", "dune-workspace", ".git" },
 })
