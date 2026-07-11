@@ -20,6 +20,7 @@ built-in `vim.pack` (Neovim 0.12+). No lazy.nvim, no Mason, no LazyVim.
 | Fuzzy find | **fzf-lua** + `fzf`/`ripgrep`/`fd` | files, live grep, symbols, keymaps, colorschemes |
 | Python LSP | **ty** (type check) + **ruff** (lint/format) | native `vim.lsp`, no lspconfig |
 | Rust LSP | **rust-analyzer** (clippy-on-save, inlay hints, rustfmt) | native `vim.lsp`; resolves the rustup toolchain binary |
+| OCaml LSP | **ocamllsp** (+ ocamlformat-on-save when configured) | native `vim.lsp`; resolves the opam switch binary |
 | Lua LSP | **lua-language-server** | tuned for editing this config — `vim.*` completion/hover, `vim` known global |
 | Syntax colors | **nvim-treesitter** (`master`) | rich highlighting |
 | Git signs | **gitsigns.nvim** | add/change/delete + hunk ops |
@@ -45,6 +46,11 @@ icons, only loaded when a Nerd Font is present).
     with `rustup component add rust-analyzer rustfmt clippy` — the editor then
     finds it (PATH or the rustup toolchain binary) and the `rust` Treesitter
     parser compiles on demand the first time you open a `.rs` file.
+  - OCaml: **fully optional, not installed by the installer.** Add it yourself
+    with `opam install ocaml-lsp-server ocamlformat` — the editor finds
+    `ocamllsp` (PATH or the opam switch binary), attaches on `.ml`/`.mli` and
+    `dune` files, and the `ocaml` Treesitter parser compiles on first open.
+    Format-on-save kicks in only when the project has a `.ocamlformat` file.
   - Lua: `lua-language-server` (handy for editing the config itself). Optional;
     install via your package manager or a release tarball, and it lights up
     automatically. Not auto-formatted on save — use `<leader>F` on demand.
@@ -127,10 +133,11 @@ of every mapping.
 | `gr` | References (fzf) · `K` Hover |
 | `<leader>rn` `<leader>ca` `<leader>F` | Rename / code action / format |
 | `[d` `]d` `<leader>d` | Prev / next / show line diagnostic |
-| `<leader>uh` | Toggle inlay hints (on for any LSP that provides them — ty, rust-analyzer, lua_ls) |
+| `<leader>uh` | Toggle inlay hints (on for any LSP that provides them — ty, rust-analyzer, ocamllsp, lua_ls) |
 | `<leader>l` | LSP status / debug — floating window (toggle) |
 
-Python and Rust **format on save** (ruff / rustfmt). Each LSP is enabled only
+Python, Rust and OCaml **format on save** (ruff / rustfmt / ocamlformat — the
+OCaml one only when the project has a `.ocamlformat`). Each LSP is enabled only
 when its tool is installed. **`<leader>l`** opens a panel showing what's attached
 to the buffer, every running client, which configured servers are present (and
 the install command for any that aren't), debug steps, and a tail of recent log
@@ -213,9 +220,9 @@ recent commits and working-tree status. `Enter` jumps in (`tcd` + files picker),
 - **Python virtualenv detection.** On opening a `.py` file, the nearest
   `.venv`/`venv`/`env` is found by walking up from the file and exported as
   `VIRTUAL_ENV` before ty/ruff start — so monorepos that share one `.venv` above
-  per-package `pyproject.toml` resolve correctly. A shell-activated venv always
-  wins. The active venv (and a Python/Rust glyph) shows on the **right of the
-  statusline**.
+  per-package `pyproject.toml` resolve correctly. A shell-activated venv wins
+  over auto-detection; a `<leader>v` pick wins over both. The active venv (and a
+  Python/Rust/OCaml glyph) shows on the **right of the statusline**.
 - **Venv dashboard (`<leader>v`).** A floating panel listing every discovered
   venv: the active one marked, each tagged `✓ ipykernel` / `✗ no kernel`. `<CR>`
   switches venv (restarts the LSP); `i` installs ipykernel into the highlighted
@@ -256,8 +263,9 @@ the palette matugen already generates
 (`~/.local/state/quickshell/user/generated/colors.json`) and re-applies when it
 changes. On a machine without DMS it silently falls back to `teal`.
 
-To change the default, edit the `vim.cmd.colorscheme("teal")` line near the
-bottom of `init.lua`.
+The scheme you pick **persists across restarts** — it's saved to the state dir
+on exit (outside the git-tracked config, so updates never reset it). The
+default when nothing is saved is `dank` (→ `teal` without DMS).
 
 ---
 

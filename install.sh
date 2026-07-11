@@ -147,9 +147,10 @@ info "Installing ty + ruff via uv…"
 uv tool install ty   >/dev/null 2>&1 || uv tool upgrade ty   || warn "ty install failed (Python LSP type-check unavailable)"
 uv tool install ruff >/dev/null 2>&1 || uv tool upgrade ruff || warn "ruff install failed (Python lint/format unavailable)"
 
-# Rust is intentionally NOT installed here — it's fully optional. If you want it,
-# install rust-analyzer yourself: rustup component add rust-analyzer rustfmt clippy
-# The editor enables rust-analyzer only when it's available, so nothing breaks.
+# Rust and OCaml are intentionally NOT installed here — they're fully optional.
+#   Rust:  rustup component add rust-analyzer rustfmt clippy
+#   OCaml: opam install ocaml-lsp-server ocamlformat
+# The editor enables each LSP only when its tool is available, so nothing breaks.
 
 # ---------------------------------------------------------------------------
 # 5. Fetch the config into ~/.config/nvim
