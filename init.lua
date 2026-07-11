@@ -1119,6 +1119,20 @@ vim.keymap.set("n", "<leader>v", function()
   vim.keymap.set("n", "<Esc>", venv_close, opts)
 end, { desc = "Python venv dashboard (switch / install ipykernel)" })
 
+-- Resolve a tool from PATH or, failing that, straight out of the opam switches
+-- ($OPAMROOT/*/bin, `default` preferred) — so OCaml tooling works even when
+-- nvim wasn't launched from an `opam env` shell. Glob only, no subprocess.
+-- Shared by the utop REPL below and the ocamllsp gate in the LSP section.
+local function find_opam_bin(name)
+  if vim.fn.executable(name) == 1 then return name end
+  local root = vim.env.OPAMROOT or ((vim.env.HOME or "") .. "/.opam")
+  local hits = vim.fn.glob(root .. "/*/bin/" .. name, true, true)
+  for _, h in ipairs(hits) do
+    if h:find("/default/", 1, true) then return h end
+  end
+  return hits[1]
+end
+
 -- ---------------------------------------------------------------------------
 -- Dynamic Python REPL — select code, run it in a persistent ipykernel, see the
 -- output inline (ephemeral virtual lines under the selection; never touches the
@@ -1128,6 +1142,7 @@ end, { desc = "Python venv dashboard (switch / install ipykernel)" })
 -- venv — absent → the keymaps no-op with a hint, so portability is preserved.
 --   x  <leader>r   run the selection      n  <leader>r   run the paragraph
 --   n  <leader>rc  clear inline outputs   n  <leader>rk  restart the kernel
+-- (The same keys drive the OCaml utop REPL — see the dispatch further down.)
 -- ---------------------------------------------------------------------------
 local repl = _G.__py_repl or { job = nil, ready = false, seq = 0, pending = {}, queue = {}, acc = "" }
 _G.__py_repl = repl
@@ -1267,13 +1282,15 @@ local function repl_attach(buf)
   })
 end
 
-local function repl_send(buf, s, e)
+-- Extract runnable code from a line range: drop ``` / ~~~ fences (safe inside a
+-- markdown block) and dedent the common leading whitespace so indented blocks
+-- run standalone. Shared by the Python and OCaml senders.
+local function code_of(buf, s, e)
   local lines = vim.api.nvim_buf_get_lines(buf, s - 1, e, false)
   local code_lines = {}
-  for _, l in ipairs(lines) do -- drop ``` / ~~~ fences (safe inside a markdown block)
+  for _, l in ipairs(lines) do
     if not l:match("^%s*```") and not l:match("^%s*~~~") then code_lines[#code_lines + 1] = l end
   end
-  -- dedent the common leading whitespace so indented blocks run standalone
   local min
   for _, l in ipairs(code_lines) do
     if not l:match("^%s*$") then
@@ -1284,7 +1301,11 @@ local function repl_send(buf, s, e)
   if min and min > 0 then
     for i, l in ipairs(code_lines) do code_lines[i] = l:sub(min + 1) end
   end
-  local code = table.concat(code_lines, "\n")
+  return table.concat(code_lines, "\n")
+end
+
+local function repl_send(buf, s, e)
+  local code = code_of(buf, s, e)
   if vim.trim(code) == "" then return end
   if not repl_ensure() then return end
   repl.seq = repl.seq + 1
@@ -1299,17 +1320,10 @@ local function repl_send(buf, s, e)
   if repl.ready then vim.fn.chansend(repl.job, payload) else repl.queue[#repl.queue + 1] = payload end
 end
 
-local function repl_run_visual()
-  local buf = vim.api.nvim_get_current_buf()
-  local s, e = vim.fn.line("v"), vim.fn.line(".")
-  if s > e then s, e = e, s end
-  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
-  repl_send(buf, s, e)
-end
-
--- In a markdown buffer, find the ```python / ```py fence enclosing the cursor;
--- returns the body's 1-indexed [start, end] (between the fences), or nil.
-local function md_python_block(buf, cur)
+-- In a markdown buffer, find the fenced code block enclosing the cursor;
+-- returns the body's 1-indexed [start, end] (between the fences) plus the
+-- fence's language tag ("python", "ocaml", …), or nil outside any fence.
+local function md_code_block(buf, cur)
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local open, lang
   for i, l in ipairs(lines) do
@@ -1317,33 +1331,11 @@ local function md_python_block(buf, cur)
       if not open then
         open, lang = i, (l:match("^%s*[`~]+%s*(%S+)") or ""):lower()
       else
-        if (lang == "python" or lang == "py") and cur >= open and cur <= i then
-          return open + 1, i - 1
-        end
+        if cur >= open and cur <= i then return open + 1, i - 1, lang end
         open, lang = nil, nil
       end
     end
   end
-end
-
-local function repl_run_paragraph()
-  local buf = vim.api.nvim_get_current_buf()
-  local cur, last = vim.fn.line("."), vim.fn.line("$")
-  if (vim.bo[buf].filetype or ""):match("markdown") then
-    local s, e = md_python_block(buf, cur)
-    if not s then
-      vim.notify("Not inside a ```python code block", vim.log.levels.WARN)
-      return
-    end
-    repl_send(buf, s, e)
-    return
-  end
-  local s, e = cur, cur
-  if not vim.fn.getline(cur):match("^%s*$") then
-    while s > 1 and not vim.fn.getline(s - 1):match("^%s*$") do s = s - 1 end
-    while e < last and not vim.fn.getline(e + 1):match("^%s*$") do e = e + 1 end
-  end
-  repl_send(buf, s, e)
 end
 
 local function repl_clear(buf)
@@ -1353,12 +1345,170 @@ local function repl_clear(buf)
   for id, m in pairs(repl.placed) do if m.buf == buf then repl.placed[id] = nil end end
 end
 
-map("x", "<leader>r", repl_run_visual, { desc = "Python REPL: run selection" })
+-- ---------------------------------------------------------------------------
+-- OCaml REPL — utop in a terminal split, driven by the SAME keys as the Python
+-- REPL. The inline machinery above is ipykernel-specific; a terminal pane is
+-- the natural home for an OCaml toplevel. Inside a dune project it runs
+-- `dune utop` so the project's libraries are already loaded; plain `utop`
+-- elsewhere. A trailing `;;` is appended when missing. Needs utop
+-- (`opam install utop`) — absent → the keymaps hint and no-op.
+-- ---------------------------------------------------------------------------
+local utop = _G.__utop or {}
+_G.__utop = utop -- { job, buf, win } — survives config hot-reload
+
+local function utop_ensure(src)
+  if utop.job and utop.buf and vim.api.nvim_buf_is_valid(utop.buf) then
+    if not (utop.win and vim.api.nvim_win_is_valid(utop.win)) then
+      local prev = vim.api.nvim_get_current_win()
+      vim.cmd("botright vsplit")
+      utop.win = vim.api.nvim_get_current_win()
+      vim.api.nvim_win_set_buf(utop.win, utop.buf)
+      vim.api.nvim_set_current_win(prev)
+    end
+    return true
+  end
+  local bin = find_opam_bin("utop")
+  if not bin then
+    vim.notify("OCaml REPL needs utop:  opam install utop", vim.log.levels.WARN)
+    return false
+  end
+  local root = vim.fs.root(src or 0, "dune-project")
+  -- `opam exec --` provides the full switch environment (OCAMLPATH & friends);
+  -- a bare switch-bin path isn't enough for `dune utop` to find the utop
+  -- LIBRARY. Inside a dune project use dune utop (project libs preloaded).
+  local cmd
+  if vim.fn.executable("opam") == 1 then
+    cmd = root and { "opam", "exec", "--", "dune", "utop" } or { "opam", "exec", "--", "utop" }
+  else
+    cmd = { bin } -- best effort: utop already on PATH via an opam env shell
+  end
+  local file_dir = vim.fs.dirname(vim.api.nvim_buf_get_name(src or 0))
+  local prev = vim.api.nvim_get_current_win()
+  vim.cmd("botright vsplit | enew")
+  utop.win, utop.buf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
+  vim.bo[utop.buf].bufhidden = "hide" -- closing the pane keeps utop (and its state) alive
+  utop.ready, utop.queue = false, {}
+  utop.job = vim.fn.jobstart(cmd, {
+    term = true,
+    cwd = root or (file_dir ~= "" and file_dir or nil),
+    on_exit = function() utop.job, utop.ready = nil, false end,
+  })
+  vim.api.nvim_set_current_win(prev)
+  if not utop.job or utop.job <= 0 then
+    utop.job = nil
+    vim.notify("OCaml REPL: failed to launch utop", vim.log.levels.ERROR)
+    return false
+  end
+  -- Input sent while `dune utop` is still BUILDING is eaten before the
+  -- toplevel exists, so hold sends until the "utop #" prompt shows up in the
+  -- terminal, then flush (mirrors the Python REPL's starting-kernel queue).
+  local tries = 0
+  local function poll()
+    if not (utop.job and utop.buf and vim.api.nvim_buf_is_valid(utop.buf)) then return end
+    local lines = vim.api.nvim_buf_get_lines(utop.buf, 0, -1, false)
+    for i = #lines, 1, -1 do
+      if lines[i]:find("utop #", 1, true) then
+        utop.ready = true
+        for _, payload in ipairs(utop.queue) do vim.fn.chansend(utop.job, payload) end
+        utop.queue = {}
+        return
+      end
+    end
+    tries = tries + 1
+    if tries < 300 then vim.defer_fn(poll, 200) end -- give a cold dune build up to 60s
+  end
+  vim.defer_fn(poll, 200)
+  return true
+end
+
+local function utop_send(buf, s, e)
+  local code = code_of(buf, s, e)
+  if vim.trim(code) == "" then return end
+  if not utop_ensure(buf) then return end
+  if not code:match(";;%s*$") then code = code .. " ;;" end
+  local payload = code .. "\n"
+  if utop.ready then vim.fn.chansend(utop.job, payload) else utop.queue[#utop.queue + 1] = payload end
+  if utop.win and vim.api.nvim_win_is_valid(utop.win) then -- keep the output in view
+    vim.api.nvim_win_call(utop.win, function() vim.cmd("normal! G") end)
+  end
+end
+
+local function utop_toggle()
+  if utop.win and vim.api.nvim_win_is_valid(utop.win) then
+    vim.api.nvim_win_close(utop.win, true)
+    utop.win = nil
+  else
+    utop_ensure(vim.api.nvim_get_current_buf())
+  end
+end
+
+local function utop_restart()
+  if utop.job then pcall(vim.fn.jobstop, utop.job) end
+  if utop.win and vim.api.nvim_win_is_valid(utop.win) then vim.api.nvim_win_close(utop.win, true) end
+  if utop.buf and vim.api.nvim_buf_is_valid(utop.buf) then
+    pcall(vim.api.nvim_buf_delete, utop.buf, { force = true })
+  end
+  utop.job, utop.buf, utop.win = nil, nil, nil
+  if utop_ensure(vim.api.nvim_get_current_buf()) then
+    vim.notify("utop restarted (fresh state)", vim.log.levels.INFO)
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- REPL dispatch — same keys everywhere; the buffer picks the backend:
+-- ocaml filetype → utop; a markdown fence routes by its language tag;
+-- everything else → the inline Python REPL.
+-- ---------------------------------------------------------------------------
+local function repl_backend(buf, cur)
+  local ft = vim.bo[buf].filetype or ""
+  if ft == "ocaml" then return "ocaml" end
+  if ft:match("markdown") then
+    local s, e, lang = md_code_block(buf, cur)
+    if s and (lang == "ocaml" or lang == "ml") then return "ocaml", s, e end
+    if s and (lang == "python" or lang == "py") then return "python", s, e end
+    return nil -- markdown, but not inside a runnable fence
+  end
+  return "python"
+end
+
+local function repl_run_visual()
+  local buf = vim.api.nvim_get_current_buf()
+  local s, e = vim.fn.line("v"), vim.fn.line(".")
+  if s > e then s, e = e, s end
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
+  -- a selection outside any markdown fence falls back to the Python REPL
+  local backend = repl_backend(buf, vim.fn.line(".")) or "python"
+  if backend == "ocaml" then utop_send(buf, s, e) else repl_send(buf, s, e) end
+end
+
+local function repl_run_paragraph()
+  local buf = vim.api.nvim_get_current_buf()
+  local cur, last = vim.fn.line("."), vim.fn.line("$")
+  if (vim.bo[buf].filetype or ""):match("markdown") then
+    local backend, s, e = repl_backend(buf, cur)
+    if not backend then
+      vim.notify("Not inside a ```python / ```ocaml code block", vim.log.levels.WARN)
+      return
+    end
+    if backend == "ocaml" then utop_send(buf, s, e) else repl_send(buf, s, e) end
+    return
+  end
+  local s, e = cur, cur
+  if not vim.fn.getline(cur):match("^%s*$") then
+    while s > 1 and not vim.fn.getline(s - 1):match("^%s*$") do s = s - 1 end
+    while e < last and not vim.fn.getline(e + 1):match("^%s*$") do e = e + 1 end
+  end
+  if repl_backend(buf, cur) == "ocaml" then utop_send(buf, s, e) else repl_send(buf, s, e) end
+end
+
+map("x", "<leader>r", repl_run_visual, { desc = "REPL: run selection (python/ocaml)" })
 -- normal-mode run is <leader>rr (not bare <leader>r) so it doesn't wait
--- timeoutlen for the rc/rk siblings; visual <leader>r has no siblings, stays snappy
-map("n", "<leader>rr", repl_run_paragraph, { desc = "Python REPL: run paragraph" })
+-- timeoutlen for the rc/rk/rt siblings; visual <leader>r has no siblings, stays snappy
+map("n", "<leader>rr", repl_run_paragraph, { desc = "REPL: run paragraph / md fence" })
 map("n", "<leader>rc", function() repl_clear() end, { desc = "Python REPL: clear outputs" })
+map("n", "<leader>rt", utop_toggle, { desc = "OCaml REPL: toggle utop pane" })
 map("n", "<leader>rk", function()
+  if vim.bo.filetype == "ocaml" then return utop_restart() end
   repl_clear()
   if repl.job and repl.job > 0 then
     vim.fn.chansend(repl.job, vim.json.encode({ id = 0, restart = true }) .. "\n")
@@ -1366,7 +1516,7 @@ map("n", "<leader>rk", function()
   else
     vim.notify("No Python kernel running", vim.log.levels.INFO)
   end
-end, { desc = "Python REPL: restart kernel" })
+end, { desc = "REPL: restart kernel / utop" })
 
 -- ---------------------------------------------------------------------------
 -- LSP: ty + ruff (Python), rust-analyzer (Rust). Servers are only *enabled*
@@ -1418,19 +1568,10 @@ vim.lsp.config("rust_analyzer", {
   },
 })
 
--- Locate ocamllsp. PATH first (covers `opam env` shells); otherwise look inside
--- opam switches directly, so nvim launched outside an opam-enabled shell still
--- finds it. Glob only — zero subprocess cost. nil ⇒ OCaml LSP simply stays off.
-local function find_ocamllsp()
-  local root = vim.env.OPAMROOT or ((vim.env.HOME or "") .. "/.opam")
-  if vim.fn.executable("ocamllsp") == 1 then return { "ocamllsp" } end
-  local hits = vim.fn.glob(root .. "/*/bin/ocamllsp", true, true)
-  for _, h in ipairs(hits) do
-    if h:find("/default/", 1, true) then return { h } end -- prefer the default switch
-  end
-  return hits[1] and { hits[1] } or nil
-end
-local oc_cmd = find_ocamllsp()
+-- Locate ocamllsp: PATH first, else straight out of the opam switches (the
+-- shared find_opam_bin helper). nil ⇒ OCaml LSP simply stays off.
+local oc_bin = find_opam_bin("ocamllsp")
+local oc_cmd = oc_bin and { oc_bin } or nil
 
 -- When ocamllsp came from a switch (nvim launched outside an `opam env` shell),
 -- the server's helpers — ocamlformat-rpc (pretty hover types), ocamlformat,
