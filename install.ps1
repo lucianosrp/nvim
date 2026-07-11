@@ -97,9 +97,10 @@ if (Have uv) {
   Warn "uv not found on PATH after install — skipping ty/ruff. Re-open the shell and run: uv tool install ty ruff"
 }
 
-# Rust is intentionally NOT installed here — it's fully optional. If you want it:
-#   rustup component add rust-analyzer rustfmt clippy
-# The editor enables rust-analyzer only when it's available.
+# Rust and OCaml are intentionally NOT installed here — they're fully optional:
+#   Rust:  rustup component add rust-analyzer rustfmt clippy
+#   OCaml: opam install ocaml-lsp-server ocamlformat
+# The editor enables each LSP only when its tool is available.
 
 # ---------------------------------------------------------------------------
 # 3. Fetch the config into %LOCALAPPDATA%\nvim

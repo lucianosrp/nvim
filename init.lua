@@ -156,6 +156,8 @@ function _G.venv_segment()
     return (nf and "\u{e73c} " or "py:") .. name .. "  " -- nf-dev-python (snake)
   elseif ft == "rust" then
     return (nf and "\u{e7a8} " or "rs:") .. "rust  " -- nf-dev-rust
+  elseif ft == "ocaml" or ft == "ocaml.interface" then
+    return (nf and "\u{e67a} " or "ml:") .. "ocaml  " -- nf-seti-ocaml (camel)
   end
   return ""
 end
@@ -207,8 +209,9 @@ if ok_ts then
       "python", "lua", "vim", "vimdoc", "bash",
       "json", "yaml", "toml", "markdown", "markdown_inline",
     },
-    -- note: `rust` is intentionally NOT pre-installed — auto_install compiles it
-    -- on demand the first time you open a .rs file, so Rust stays fully optional
+    -- note: `rust` and `ocaml` are intentionally NOT pre-installed — auto_install
+    -- compiles them on demand the first time you open a .rs/.ml file, so those
+    -- toolchains stay fully optional
     auto_install = true,           -- compile a missing parser on first open (uses gcc)
     highlight = {
       enable = true,
@@ -917,7 +920,9 @@ map("n", "<leader>gw", worktrees, { desc = "Worktrees: list / switch / create / 
 -- `.venv` in its OWN project root — which misses monorepos that share a single
 -- `.venv` ABOVE the per-package pyproject.toml. So find the nearest venv by
 -- walking up from the file and export VIRTUAL_ENV before the servers start.
--- A venv already activated in the shell always wins and is never overridden.
+-- Precedence: an explicit <leader>v pick beats everything (otherwise the picker
+-- could never switch away), then a venv already activated in the shell, then
+-- the walk-up auto-detection.
 -- ---------------------------------------------------------------------------
 local function find_venvs_up(start)
   local hits = vim.fs.find({ ".venv", "venv", "env" }, {
@@ -934,8 +939,8 @@ local shell_venv = (vim.env.VIRTUAL_ENV and vim.fn.isdirectory(vim.env.VIRTUAL_E
 local venv_override = nil -- set by the <leader>v picker
 
 local function venv_for(buf)
-  if shell_venv then return shell_venv end
   if venv_override then return venv_override end
+  if shell_venv then return shell_venv end
   return find_venvs_up(vim.api.nvim_buf_get_name(buf))[1]
 end
 
@@ -1413,6 +1418,30 @@ vim.lsp.config("rust_analyzer", {
   },
 })
 
+-- Locate ocamllsp. PATH first (covers `opam env` shells); otherwise look inside
+-- opam switches directly, so nvim launched outside an opam-enabled shell still
+-- finds it. Glob only — zero subprocess cost. nil ⇒ OCaml LSP simply stays off.
+local function find_ocamllsp()
+  local root = vim.env.OPAMROOT or ((vim.env.HOME or "") .. "/.opam")
+  if vim.fn.executable("ocamllsp") == 1 then return { "ocamllsp" } end
+  local hits = vim.fn.glob(root .. "/*/bin/ocamllsp", true, true)
+  for _, h in ipairs(hits) do
+    if h:find("/default/", 1, true) then return { h } end -- prefer the default switch
+  end
+  return hits[1] and { hits[1] } or nil
+end
+local oc_cmd = find_ocamllsp()
+
+-- OCaml: ocamllsp (`opam install ocaml-lsp-server`), rooted at the dune project;
+-- also attaches to dune files themselves. Completion + inlay hints come from the
+-- shared LspAttach below. The `ocaml` Treesitter parser compiles on first open
+-- (auto_install), so OCaml — like Rust — stays fully optional.
+vim.lsp.config("ocamllsp", {
+  cmd = oc_cmd or { "ocamllsp" },
+  filetypes = { "ocaml", "ocaml.interface", "ocaml.menhir", "ocaml.ocamllex", "dune" },
+  root_markers = { "dune-project", "dune-workspace", ".git" },
+})
+
 -- Lua: lua-language-server, tuned for editing THIS config — it's told about the
 -- Neovim runtime so `vim.*` gets completion/hover/signatures, and that `vim` is
 -- a global (no "undefined global" noise). No format-on-save (don't reflow your
@@ -1431,51 +1460,23 @@ vim.lsp.config("lua_ls", {
   },
 })
 
--- Enable a server only when its tool is actually present — otherwise opening a
--- file errors with "command not found" on a machine without the tool.
+-- One table drives everything server-related: startup gating (enable a server
+-- only when its tool is actually present, so a machine without the toolchain
+-- opens files cleanly instead of erroring "command not found") AND the
+-- <leader>l dashboard's SERVERS section. Adding a server = one vim.lsp.config()
+-- above + one { name, present?, install-hint } row here.
+local lsp_servers = {
+  { "ty", function() return vim.fn.executable("ty") == 1 end, "uv tool install ty" },
+  { "ruff", function() return vim.fn.executable("ruff") == 1 end, "uv tool install ruff" },
+  { "lua_ls", function() return vim.fn.executable("lua-language-server") == 1 end, "install lua-language-server" },
+  { "rust_analyzer", function() return ra_cmd ~= nil end, "rustup component add rust-analyzer" },
+  { "ocamllsp", function() return oc_cmd ~= nil end, "opam install ocaml-lsp-server ocamlformat" },
+}
 local lsp_on = {}
-if vim.fn.executable("ty") == 1 then lsp_on[#lsp_on + 1] = "ty" end
-if vim.fn.executable("ruff") == 1 then lsp_on[#lsp_on + 1] = "ruff" end
-if vim.fn.executable("lua-language-server") == 1 then lsp_on[#lsp_on + 1] = "lua_ls" end
-if ra_cmd then lsp_on[#lsp_on + 1] = "rust_analyzer" end
+for _, s in ipairs(lsp_servers) do
+  if s[2]() then lsp_on[#lsp_on + 1] = s[1] end
+end
 if #lsp_on > 0 then vim.lsp.enable(lsp_on) end
-
--- ---------------------------------------------------------------------------
--- Hover cleanup: ty (and others) emit docstrings containing HTML entities
--- (&nbsp; for indentation) and CommonMark backslash escapes (plain\_text),
--- which the float renders literally. Decode them so `K` reads cleanly.
--- ---------------------------------------------------------------------------
-local function clean_markup(s)
-  if type(s) ~= "string" then return s end
-  s = s:gsub("&nbsp;", " "):gsub("&amp;", "&"):gsub("&lt;", "<")
-    :gsub("&gt;", ">"):gsub("&quot;", '"'):gsub("&#39;", "'")
-  s = s:gsub("\\(%p)", "%1") -- strip CommonMark backslash escapes
-  return s
-end
-
--- Capture the pristine default once (in _G) so re-sourcing on hot-reload never
--- nests this wrapper inside a previous copy of itself.
-_G.__orig_hover = _G.__orig_hover or vim.lsp.handlers["textDocument/hover"] or vim.lsp.handlers.hover
-local orig_hover = _G.__orig_hover
-vim.lsp.handlers["textDocument/hover"] = function(err, result, ctx, config)
-  local c = result and result.contents
-  if type(c) == "table" then
-    if c.value then
-      c.value = clean_markup(c.value)
-    else
-      for i, item in ipairs(c) do
-        if type(item) == "string" then
-          c[i] = clean_markup(item)
-        elseif type(item) == "table" then
-          item.value = clean_markup(item.value)
-        end
-      end
-    end
-  elseif type(c) == "string" then
-    result.contents = clean_markup(c)
-  end
-  return orig_hover(err, result, ctx, config)
-end
 
 -- ---------------------------------------------------------------------------
 -- LSP buffer behaviour & keymaps (attached per-buffer when a server connects)
@@ -1552,6 +1553,23 @@ vim.api.nvim_create_autocmd("BufWritePre", {
       bufnr = args.buf,
       async = false,
       filter = function(c) return c.name == "rust_analyzer" end,
+    })
+  end,
+})
+
+-- Format OCaml on save (ocamlformat via ocamllsp) — but only when the project
+-- carries a .ocamlformat file: without one ocamlformat refuses to run, and
+-- every save would flash an error. No-ops if the server didn't attach.
+vim.api.nvim_create_autocmd("BufWritePre", {
+  group = aug,
+  pattern = { "*.ml", "*.mli" },
+  callback = function(args)
+    if vim.b[args.buf].large_file then return end
+    if not vim.fs.root(args.buf, ".ocamlformat") then return end
+    vim.lsp.buf.format({
+      bufnr = args.buf,
+      async = false,
+      filter = function(c) return c.name == "ocamllsp" end,
     })
   end,
 })
@@ -1639,15 +1657,9 @@ local function lsp_dashboard(buf)
   end
   add({})
 
-  -- Servers: configured ↔ available ↔ running
+  -- Servers: configured ↔ available ↔ running (the shared lsp_servers table)
   header("SERVERS")
-  local servers = {
-    { "ty", function() return vim.fn.executable("ty") == 1 end, "uv tool install ty" },
-    { "ruff", function() return vim.fn.executable("ruff") == 1 end, "uv tool install ruff" },
-    { "lua_ls", function() return vim.fn.executable("lua-language-server") == 1 end, "install lua-language-server" },
-    { "rust_analyzer", function() return vim.fn.executable("rust-analyzer") == 1 or vim.fn.executable("rustup") == 1 end, "rustup component add rust-analyzer" },
-  }
-  for _, s in ipairs(servers) do
+  for _, s in ipairs(lsp_servers) do
     local name, present = s[1], s[2]()
     local glyph, ghl, status, shl
     if running[name] then
