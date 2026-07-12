@@ -145,35 +145,36 @@ errors. In the panel: **`r`** restarts the buffer's LSP clients, **`c`** copies
 the recent log errors to the clipboard, `q` closes. All floating windows (hover
 `K`, signature, diagnostics, this panel) carry a thin rounded border.
 
-### REPL (Python inline · OCaml utop)
-One set of keys; the buffer picks the backend — Python code goes to the inline
-ipykernel REPL, OCaml code to a **utop** terminal pane. In Markdown, the fence's
-language tag decides (```python → inline, ```ocaml → utop).
+### Inline REPL (Python · OCaml)
+One set of keys, one look: run code, and the result appears as dim **virtual
+lines under the code** — never written into the buffer. The buffer picks the
+backend: Python goes to an ipykernel, OCaml to an `ocaml` toplevel. In
+Markdown, the fence's language tag decides (```python / ```ocaml).
 
 | Key | Action |
 |-----|--------|
 | `<leader>r` (visual) | Run the selected lines |
 | `<leader>rr` | Run the current paragraph — or, in Markdown, the enclosing fence |
-| `<leader>rc` | Python: clear the inline outputs |
-| `<leader>rt` | OCaml: toggle the utop pane |
-| `<leader>rk` | Restart the kernel / utop (fresh state) |
+| `<leader>rc` | Clear the inline outputs |
+| `<leader>rk` | Restart the kernel / toplevel (fresh state) |
 
-**Python:** runs in a persistent **ipykernel** living in your **active venv** —
-output (stdout, the `Out[n]` result, and tracebacks) renders as dim **virtual
-lines under the code**, never written into the buffer. State persists across
-runs, so it's a real REPL: define something in one selection, use it in the
-next. An output stays put until you **edit the code that produced it** — adding
-a line just below it leaves it in place. Needs `ipykernel` in the venv
+Both backends behave the same way: state **persists across runs** (define
+something in one send, use it in the next), errors render in red, and an output
+stays put until you **edit the code that produced it** — adding a line just
+below it leaves it in place.
+
+**Python** runs in a persistent **ipykernel** living in your **active venv**
+(stdout, the `Out[n]` result, tracebacks). Needs `ipykernel` in the venv
 (`uv pip install ipykernel`); if it's missing the keys just say so. No plugin —
 a tiny stdio daemon (`python/jrepl.py`) runs in the venv python and Neovim only
 renders.
 
-**OCaml:** sends to **utop** in a terminal split (a trailing `;;` is appended
-when missing). Inside a dune project it runs `dune utop`, so your project's
-libraries are already loaded; launched via `opam exec` so the switch environment
-is right even when nvim wasn't started from an opam-enabled shell. Sends made
-while utop is still starting are queued and flushed at the first prompt. Needs
-`opam install utop`; if it's missing the keys just say so.
+**OCaml** runs in a persistent `ocaml` **toplevel** over plain pipes (launched
+via `opam exec`, so the switch environment is right even when nvim wasn't
+started from an opam shell). A trailing `;;` is appended when missing, and you
+get the toplevel's answers inline: `val x : int = 42`, type errors with their
+source context, exceptions. Needs an ocaml toplevel (`opam install ocaml`); if
+it's missing the keys just say so.
 
 ### Folding
 Treesitter-powered, in **every language with a parser**: fold functions,
