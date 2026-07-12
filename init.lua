@@ -1122,7 +1122,7 @@ end, { desc = "Python venv dashboard (switch / install ipykernel)" })
 -- Resolve a tool from PATH or, failing that, straight out of the opam switches
 -- ($OPAMROOT/*/bin, `default` preferred) — so OCaml tooling works even when
 -- nvim wasn't launched from an `opam env` shell. Glob only, no subprocess.
--- Shared by the utop REPL below and the ocamllsp gate in the LSP section.
+-- Shared by the OCaml REPL below and the ocamllsp gate in the LSP section.
 local function find_opam_bin(name)
   if vim.fn.executable(name) == 1 then return name end
   local root = vim.env.OPAMROOT or ((vim.env.HOME or "") .. "/.opam")
@@ -1142,7 +1142,7 @@ end
 -- venv — absent → the keymaps no-op with a hint, so portability is preserved.
 --   x  <leader>r   run the selection      n  <leader>r   run the paragraph
 --   n  <leader>rc  clear inline outputs   n  <leader>rk  restart the kernel
--- (The same keys drive the OCaml utop REPL — see the dispatch further down.)
+-- (The same keys drive the inline OCaml REPL — see the dispatch further down.)
 -- ---------------------------------------------------------------------------
 local repl = _G.__py_repl or { job = nil, ready = false, seq = 0, pending = {}, queue = {}, acc = "" }
 _G.__py_repl = repl
@@ -1346,118 +1346,157 @@ local function repl_clear(buf)
 end
 
 -- ---------------------------------------------------------------------------
--- OCaml REPL — utop in a terminal split, driven by the SAME keys as the Python
--- REPL. The inline machinery above is ipykernel-specific; a terminal pane is
--- the natural home for an OCaml toplevel. Inside a dune project it runs
--- `dune utop` so the project's libraries are already loaded; plain `utop`
--- elsewhere. A trailing `;;` is appended when missing. Needs utop
--- (`opam install utop`) — absent → the keymaps hint and no-op.
+-- OCaml REPL — INLINE, exactly like the Python one. Sends go to a persistent
+-- `ocaml` toplevel over plain pipes: with piped stdin the toplevel still runs
+-- interactively (`# ` prompts + `val …` results) but nothing is echoed back,
+-- so the stream parses cleanly with no PTY. Output between two prompts belongs
+-- to the oldest in-flight send (FIFO); a send counts its `;;` phrases so
+-- multi-phrase selections resolve correctly. Reuses the Python REPL's
+-- pending/placed/render machinery — outputs are the same dim virtual lines,
+-- cleared by <leader>rc or by editing the code that produced them. Needs an
+-- ocaml toplevel (opam switch or system) — absent → the keymaps hint and no-op.
 -- ---------------------------------------------------------------------------
-local utop = _G.__utop or {}
-_G.__utop = utop -- { job, buf, win } — survives config hot-reload
+local mltop = _G.__ml_top or { job = nil, ready = false, acc = "", stderr = "", fifo = {}, queue = {} }
+_G.__ml_top = mltop
 
-local function utop_ensure(src)
-  if utop.job and utop.buf and vim.api.nvim_buf_is_valid(utop.buf) then
-    if not (utop.win and vim.api.nvim_win_is_valid(utop.win)) then
-      local prev = vim.api.nvim_get_current_win()
-      vim.cmd("botright vsplit")
-      utop.win = vim.api.nvim_get_current_win()
-      vim.api.nvim_win_set_buf(utop.win, utop.buf)
-      vim.api.nvim_set_current_win(prev)
+-- resolve every in-flight send to an error so nothing hangs when the toplevel
+-- dies or never comes up (mirrors repl_fail)
+local function ml_fail(msg)
+  for _, f in ipairs(mltop.fifo) do
+    local p = repl.pending[f.id]
+    if p then
+      p.parts, p.running = { { kind = "error", text = msg } }, false
+      vim.schedule(function() repl_render(p) end)
+      repl.pending[f.id] = nil
     end
-    return true
   end
-  local bin = find_opam_bin("utop")
-  if not bin then
-    vim.notify("OCaml REPL needs utop:  opam install utop", vim.log.levels.WARN)
+  mltop.fifo = {}
+  vim.schedule(function() vim.notify("OCaml REPL: " .. msg, vim.log.levels.ERROR) end)
+end
+
+-- one prompt closed: credit the text to the oldest in-flight send; finalize it
+-- once all of its `;;` phrases have answered
+local function ml_resolve(text)
+  local f = mltop.fifo[1]
+  if not f then return end
+  f.out[#f.out + 1] = text
+  f.needed = f.needed - 1
+  if f.needed > 0 then return end
+  table.remove(mltop.fifo, 1)
+  local p = repl.pending[f.id]
+  if not p then return end
+  local body = table.concat(f.out, "\n"):gsub("\r", ""):gsub("^%s+", ""):gsub("%s+$", "")
+  local err = body:sub(1, 5) == "Error" or body:sub(1, 9) == "Exception"
+    or body:find("\nError", 1, true) or body:find("\nException", 1, true)
+  p.parts = { err and { kind = "error", text = body }
+    or { kind = "ok", text = body ~= "" and body or "✓ (no output)" } }
+  p.running = false
+  repl.pending[f.id] = nil
+  vim.schedule(function() repl_render(p) end)
+end
+
+local function ml_on_stdout(_, data)
+  if not data then return end
+  mltop.acc = mltop.acc .. table.concat(data, "\n")
+  while true do
+    local s, e
+    if mltop.acc:sub(1, 2) == "# " then
+      s, e = 1, 2
+    else
+      s = mltop.acc:find("\n# ", 1, true)
+      if s then e = s + 2 end
+    end
+    if not s then return end
+    local before = mltop.acc:sub(1, s - 1)
+    mltop.acc = mltop.acc:sub(e + 1)
+    if not mltop.ready then
+      -- first prompt: banner consumed, toplevel is up — flush queued sends and
+      -- flip their "starting toplevel…" placeholders to "running…"
+      mltop.ready = true
+      for _, payload in ipairs(mltop.queue) do vim.fn.chansend(mltop.job, payload) end
+      mltop.queue = {}
+      vim.schedule(function()
+        for _, f in ipairs(mltop.fifo) do
+          local p = repl.pending[f.id]
+          if p and p.running then
+            p.parts = { { kind = "running", text = "running…" } }
+            repl_render(p)
+          end
+        end
+      end)
+    else
+      ml_resolve(before)
+    end
+  end
+end
+
+local function ml_ensure(src)
+  if mltop.job and mltop.job > 0 then return true end
+  local cmd
+  if vim.fn.executable("opam") == 1 and find_opam_bin("ocaml") then
+    cmd = { "opam", "exec", "--", "ocaml", "-noinit" } -- full switch environment
+  elseif vim.fn.executable("ocaml") == 1 then
+    cmd = { "ocaml", "-noinit" } -- system compiler toplevel
+  else
+    vim.notify("OCaml REPL needs an ocaml toplevel:  opam install ocaml (or your system package)", vim.log.levels.WARN)
     return false
   end
   local root = vim.fs.root(src or 0, "dune-project")
-  -- `opam exec --` provides the full switch environment (OCAMLPATH & friends);
-  -- a bare switch-bin path isn't enough for `dune utop` to find the utop
-  -- LIBRARY. Inside a dune project use dune utop (project libs preloaded).
-  local cmd
-  if vim.fn.executable("opam") == 1 then
-    cmd = root and { "opam", "exec", "--", "dune", "utop" } or { "opam", "exec", "--", "utop" }
-  else
-    cmd = { bin } -- best effort: utop already on PATH via an opam env shell
-  end
   local file_dir = vim.fs.dirname(vim.api.nvim_buf_get_name(src or 0))
-  local prev = vim.api.nvim_get_current_win()
-  vim.cmd("botright vsplit | enew")
-  utop.win, utop.buf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
-  vim.bo[utop.buf].bufhidden = "hide" -- closing the pane keeps utop (and its state) alive
-  utop.ready, utop.queue = false, {}
-  utop.job = vim.fn.jobstart(cmd, {
-    term = true,
+  mltop.ready, mltop.acc, mltop.stderr, mltop.fifo, mltop.queue = false, "", "", {}, {}
+  mltop.job = vim.fn.jobstart(cmd, {
     cwd = root or (file_dir ~= "" and file_dir or nil),
-    on_exit = function() utop.job, utop.ready = nil, false end,
+    on_stdout = ml_on_stdout,
+    on_stderr = function(_, d) -- eval errors go to stdout; stderr = hard faults only
+      local t = d and vim.trim(table.concat(d, "\n")) or ""
+      if t ~= "" then mltop.stderr = (mltop.stderr .. "\n" .. t):sub(-600) end
+    end,
+    on_exit = function()
+      local hanging = #mltop.fifo > 0
+      mltop.job, mltop.ready, mltop.queue = nil, false, {}
+      if hanging then
+        ml_fail("toplevel exited" .. (mltop.stderr ~= "" and ("\n" .. mltop.stderr) or ""))
+      end
+    end,
   })
-  vim.api.nvim_set_current_win(prev)
-  if not utop.job or utop.job <= 0 then
-    utop.job = nil
-    vim.notify("OCaml REPL: failed to launch utop", vim.log.levels.ERROR)
+  if mltop.job <= 0 then
+    mltop.job = nil
+    vim.notify("OCaml REPL: failed to launch the ocaml toplevel", vim.log.levels.ERROR)
     return false
   end
-  -- Input sent while `dune utop` is still BUILDING is eaten before the
-  -- toplevel exists, so hold sends until the "utop #" prompt shows up in the
-  -- terminal, then flush (mirrors the Python REPL's starting-kernel queue).
-  local tries = 0
-  local function poll()
-    if not (utop.job and utop.buf and vim.api.nvim_buf_is_valid(utop.buf)) then return end
-    local lines = vim.api.nvim_buf_get_lines(utop.buf, 0, -1, false)
-    for i = #lines, 1, -1 do
-      if lines[i]:find("utop #", 1, true) then
-        utop.ready = true
-        for _, payload in ipairs(utop.queue) do vim.fn.chansend(utop.job, payload) end
-        utop.queue = {}
-        return
-      end
-    end
-    tries = tries + 1
-    if tries < 300 then vim.defer_fn(poll, 200) end -- give a cold dune build up to 60s
-  end
-  vim.defer_fn(poll, 200)
   return true
 end
 
-local function utop_send(buf, s, e)
+local function ml_send(buf, s, e)
   local code = code_of(buf, s, e)
   if vim.trim(code) == "" then return end
-  if not utop_ensure(buf) then return end
+  if not ml_ensure(buf) then return end
   if not code:match(";;%s*$") then code = code .. " ;;" end
+  local _, phrases = code:gsub(";;", "")
+  repl.seq = repl.seq + 1 -- ids shared with the Python REPL: one namespace, one renderer
+  local id = repl.seq
+  local p = { id = id, buf = buf, row = e - 1, running = true,
+    parts = { { kind = "running", text = mltop.ready and "running…" or "starting toplevel…" } } }
+  repl.pending[id] = p
+  repl.placed[id] = { buf = buf, span = e - s }
+  repl_attach(buf)
+  repl_render(p)
+  mltop.fifo[#mltop.fifo + 1] = { id = id, needed = math.max(phrases, 1), out = {} }
   local payload = code .. "\n"
-  if utop.ready then vim.fn.chansend(utop.job, payload) else utop.queue[#utop.queue + 1] = payload end
-  if utop.win and vim.api.nvim_win_is_valid(utop.win) then -- keep the output in view
-    vim.api.nvim_win_call(utop.win, function() vim.cmd("normal! G") end)
-  end
+  if mltop.ready then vim.fn.chansend(mltop.job, payload) else mltop.queue[#mltop.queue + 1] = payload end
 end
 
-local function utop_toggle()
-  if utop.win and vim.api.nvim_win_is_valid(utop.win) then
-    vim.api.nvim_win_close(utop.win, true)
-    utop.win = nil
-  else
-    utop_ensure(vim.api.nvim_get_current_buf())
-  end
-end
-
-local function utop_restart()
-  if utop.job then pcall(vim.fn.jobstop, utop.job) end
-  if utop.win and vim.api.nvim_win_is_valid(utop.win) then vim.api.nvim_win_close(utop.win, true) end
-  if utop.buf and vim.api.nvim_buf_is_valid(utop.buf) then
-    pcall(vim.api.nvim_buf_delete, utop.buf, { force = true })
-  end
-  utop.job, utop.buf, utop.win = nil, nil, nil
-  if utop_ensure(vim.api.nvim_get_current_buf()) then
-    vim.notify("utop restarted (fresh state)", vim.log.levels.INFO)
-  end
+local function ml_restart()
+  repl_clear()
+  if mltop.job then pcall(vim.fn.jobstop, mltop.job) end
+  mltop.job, mltop.ready, mltop.acc, mltop.fifo, mltop.queue = nil, false, "", {}, {}
+  vim.notify("OCaml toplevel restarted (fresh state)", vim.log.levels.INFO)
 end
 
 -- ---------------------------------------------------------------------------
 -- REPL dispatch — same keys everywhere; the buffer picks the backend:
--- ocaml filetype → utop; a markdown fence routes by its language tag;
--- everything else → the inline Python REPL.
+-- ocaml filetype → the ocaml toplevel; a markdown fence routes by its language
+-- tag; everything else → the Python kernel. Both render inline.
 -- ---------------------------------------------------------------------------
 local function repl_backend(buf, cur)
   local ft = vim.bo[buf].filetype or ""
@@ -1478,7 +1517,7 @@ local function repl_run_visual()
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
   -- a selection outside any markdown fence falls back to the Python REPL
   local backend = repl_backend(buf, vim.fn.line(".")) or "python"
-  if backend == "ocaml" then utop_send(buf, s, e) else repl_send(buf, s, e) end
+  if backend == "ocaml" then ml_send(buf, s, e) else repl_send(buf, s, e) end
 end
 
 local function repl_run_paragraph()
@@ -1490,7 +1529,7 @@ local function repl_run_paragraph()
       vim.notify("Not inside a ```python / ```ocaml code block", vim.log.levels.WARN)
       return
     end
-    if backend == "ocaml" then utop_send(buf, s, e) else repl_send(buf, s, e) end
+    if backend == "ocaml" then ml_send(buf, s, e) else repl_send(buf, s, e) end
     return
   end
   local s, e = cur, cur
@@ -1498,17 +1537,16 @@ local function repl_run_paragraph()
     while s > 1 and not vim.fn.getline(s - 1):match("^%s*$") do s = s - 1 end
     while e < last and not vim.fn.getline(e + 1):match("^%s*$") do e = e + 1 end
   end
-  if repl_backend(buf, cur) == "ocaml" then utop_send(buf, s, e) else repl_send(buf, s, e) end
+  if repl_backend(buf, cur) == "ocaml" then ml_send(buf, s, e) else repl_send(buf, s, e) end
 end
 
 map("x", "<leader>r", repl_run_visual, { desc = "REPL: run selection (python/ocaml)" })
 -- normal-mode run is <leader>rr (not bare <leader>r) so it doesn't wait
--- timeoutlen for the rc/rk/rt siblings; visual <leader>r has no siblings, stays snappy
+-- timeoutlen for the rc/rk siblings; visual <leader>r has no siblings, stays snappy
 map("n", "<leader>rr", repl_run_paragraph, { desc = "REPL: run paragraph / md fence" })
-map("n", "<leader>rc", function() repl_clear() end, { desc = "Python REPL: clear outputs" })
-map("n", "<leader>rt", utop_toggle, { desc = "OCaml REPL: toggle utop pane" })
+map("n", "<leader>rc", function() repl_clear() end, { desc = "REPL: clear inline outputs" })
 map("n", "<leader>rk", function()
-  if vim.bo.filetype == "ocaml" then return utop_restart() end
+  if vim.bo.filetype == "ocaml" then return ml_restart() end
   repl_clear()
   if repl.job and repl.job > 0 then
     vim.fn.chansend(repl.job, vim.json.encode({ id = 0, restart = true }) .. "\n")
@@ -1516,7 +1554,7 @@ map("n", "<leader>rk", function()
   else
     vim.notify("No Python kernel running", vim.log.levels.INFO)
   end
-end, { desc = "REPL: restart kernel / utop" })
+end, { desc = "REPL: restart kernel / toplevel" })
 
 -- ---------------------------------------------------------------------------
 -- LSP: ty + ruff (Python), rust-analyzer (Rust). Servers are only *enabled*
