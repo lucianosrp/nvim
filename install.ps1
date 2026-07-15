@@ -97,9 +97,10 @@ if (Have uv) {
   Warn "uv not found on PATH after install — skipping ty/ruff. Re-open the shell and run: uv tool install ty ruff"
 }
 
-# Rust and OCaml are intentionally NOT installed here — they're fully optional:
+# Rust, OCaml and C/C++ are intentionally NOT installed here — fully optional:
 #   Rust:  rustup component add rust-analyzer rustfmt clippy
 #   OCaml: opam install ocaml-lsp-server ocamlformat
+#   C/C++: install clangd (winget install LLVM.LLVM, or scoop install llvm)
 # The editor enables each LSP only when its tool is available.
 
 # ---------------------------------------------------------------------------

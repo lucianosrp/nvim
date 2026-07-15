@@ -158,6 +158,10 @@ function _G.venv_segment()
     return (nf and "\u{e7a8} " or "rs:") .. "rust  " -- nf-dev-rust
   elseif ft == "ocaml" or ft == "ocaml.interface" then
     return (nf and "\u{e67a} " or "ml:") .. "ocaml  " -- nf-seti-ocaml (camel)
+  elseif ft == "c" then
+    return (nf and "\u{e61e} " or "c:") .. "c  " -- nf-custom-c
+  elseif ft == "cpp" then
+    return (nf and "\u{e61d} " or "c++:") .. "c++  " -- nf-custom-cpp
   end
   return ""
 end
@@ -209,9 +213,10 @@ if ok_ts then
       "python", "lua", "vim", "vimdoc", "bash",
       "json", "yaml", "toml", "markdown", "markdown_inline",
     },
-    -- note: `rust` and `ocaml` are intentionally NOT pre-installed — auto_install
-    -- compiles them on demand the first time you open a .rs/.ml file, so those
-    -- toolchains stay fully optional
+    -- note: `rust`, `ocaml` and `cpp` are intentionally NOT pre-installed —
+    -- auto_install compiles them on demand the first time you open a
+    -- .rs/.ml/.cpp file, so those toolchains stay fully optional (`c` is
+    -- bundled with Neovim itself)
     auto_install = true,           -- compile a missing parser on first open (uses gcc)
     highlight = {
       enable = true,
@@ -1557,9 +1562,10 @@ map("n", "<leader>rk", function()
 end, { desc = "REPL: restart kernel / toplevel" })
 
 -- ---------------------------------------------------------------------------
--- LSP: ty + ruff (Python), rust-analyzer (Rust). Servers are only *enabled*
--- when their binary is installed, so a machine without the toolchain opens
--- .py/.rs files cleanly instead of erroring with "command not found".
+-- LSP: ty + ruff (Python), rust-analyzer (Rust), ocamllsp (OCaml), clangd
+-- (C/C++), lua_ls (Lua). Servers are only *enabled* when their binary is
+-- installed, so a machine without a toolchain opens its files cleanly instead
+-- of erroring with "command not found".
 -- ---------------------------------------------------------------------------
 vim.lsp.config("ty", {
   cmd = { "ty", "server" },
@@ -1631,6 +1637,19 @@ vim.lsp.config("ocamllsp", {
   root_markers = { "dune-project", "dune-workspace", ".git" },
 })
 
+-- C / C++: clangd (usually part of the system `clang` package). Best with a
+-- compile_commands.json (CMake: -DCMAKE_EXPORT_COMPILE_COMMANDS=ON; plain
+-- Makefiles: `bear -- make`); single files work out of the box via clangd's
+-- fallback flags. Completion + inlay hints come from the shared LspAttach.
+vim.lsp.config("clangd", {
+  cmd = { "clangd", "--background-index" },
+  filetypes = { "c", "cpp", "objc", "objcpp", "cuda" },
+  root_markers = {
+    "compile_commands.json", "compile_flags.txt", ".clangd",
+    "CMakeLists.txt", "Makefile", ".git",
+  },
+})
+
 -- Lua: lua-language-server, tuned for editing THIS config — it's told about the
 -- Neovim runtime so `vim.*` gets completion/hover/signatures, and that `vim` is
 -- a global (no "undefined global" noise). No format-on-save (don't reflow your
@@ -1660,6 +1679,7 @@ local lsp_servers = {
   { "lua_ls", function() return vim.fn.executable("lua-language-server") == 1 end, "install lua-language-server" },
   { "rust_analyzer", function() return ra_cmd ~= nil end, "rustup component add rust-analyzer" },
   { "ocamllsp", function() return oc_cmd ~= nil end, "opam install ocaml-lsp-server ocamlformat" },
+  { "clangd", function() return vim.fn.executable("clangd") == 1 end, "install clangd (clang package)" },
 }
 local lsp_on = {}
 for _, s in ipairs(lsp_servers) do
@@ -1742,6 +1762,23 @@ vim.api.nvim_create_autocmd("BufWritePre", {
       bufnr = args.buf,
       async = false,
       filter = function(c) return c.name == "rust_analyzer" end,
+    })
+  end,
+})
+
+-- Format C/C++ on save (clang-format via clangd) — but only when the project
+-- carries a .clang-format file: without one clangd falls back to LLVM style
+-- and would reflow code that was never meant to be auto-formatted.
+vim.api.nvim_create_autocmd("BufWritePre", {
+  group = aug,
+  pattern = { "*.c", "*.h", "*.cpp", "*.hpp", "*.cc", "*.cxx" },
+  callback = function(args)
+    if vim.b[args.buf].large_file then return end
+    if not vim.fs.root(args.buf, ".clang-format") then return end
+    vim.lsp.buf.format({
+      bufnr = args.buf,
+      async = false,
+      filter = function(c) return c.name == "clangd" end,
     })
   end,
 })
