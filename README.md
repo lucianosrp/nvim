@@ -21,6 +21,7 @@ built-in `vim.pack` (Neovim 0.12+). No lazy.nvim, no Mason, no LazyVim.
 | Python LSP | **ty** (type check) + **ruff** (lint/format) | native `vim.lsp`, no lspconfig |
 | Rust LSP | **rust-analyzer** (clippy-on-save, inlay hints, rustfmt) | native `vim.lsp`; resolves the rustup toolchain binary |
 | OCaml LSP | **ocamllsp** (+ ocamlformat-on-save when configured) | native `vim.lsp`; resolves the opam switch binary |
+| C/C++ LSP | **clangd** (+ clang-format-on-save when configured) | native `vim.lsp`; background indexing |
 | Lua LSP | **lua-language-server** | tuned for editing this config — `vim.*` completion/hover, `vim` known global |
 | Syntax colors | **nvim-treesitter** (`master`) | rich highlighting |
 | Git signs | **gitsigns.nvim** | add/change/delete + hunk ops |
@@ -51,6 +52,12 @@ icons, only loaded when a Nerd Font is present).
     `ocamllsp` (PATH or the opam switch binary), attaches on `.ml`/`.mli` and
     `dune` files, and the `ocaml` Treesitter parser compiles on first open.
     Format-on-save kicks in only when the project has a `.ocamlformat` file.
+  - C/C++: **fully optional, not installed by the installer.** Install `clangd`
+    (part of your distro's `clang` package) and it lights up on `.c`/`.cpp`
+    files. Best with a `compile_commands.json` (CMake:
+    `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`; Makefiles: `bear -- make`), but single
+    files work via clangd's fallback flags. Format-on-save kicks in only when
+    the project has a `.clang-format` file.
   - Lua: `lua-language-server` (handy for editing the config itself). Optional;
     install via your package manager or a release tarball, and it lights up
     automatically. Not auto-formatted on save — use `<leader>F` on demand.
@@ -133,11 +140,12 @@ of every mapping.
 | `gr` | References (fzf) · `K` Hover |
 | `<leader>rn` `<leader>ca` `<leader>F` | Rename / code action / format |
 | `[d` `]d` `<leader>d` | Prev / next / show line diagnostic |
-| `<leader>uh` | Toggle inlay hints (on for any LSP that provides them — ty, rust-analyzer, ocamllsp, lua_ls) |
+| `<leader>uh` | Toggle inlay hints (on for any LSP that provides them — ty, rust-analyzer, ocamllsp, clangd, lua_ls) |
 | `<leader>l` | LSP status / debug — floating window (toggle) |
 
-Python, Rust and OCaml **format on save** (ruff / rustfmt / ocamlformat — the
-OCaml one only when the project has a `.ocamlformat`). Each LSP is enabled only
+Python, Rust, OCaml and C/C++ **format on save** (ruff / rustfmt / ocamlformat /
+clang-format — the last two only when the project has a `.ocamlformat` /
+`.clang-format`). Each LSP is enabled only
 when its tool is installed. **`<leader>l`** opens a panel showing what's attached
 to the buffer, every running client, which configured servers are present (and
 the install command for any that aren't), debug steps, and a tail of recent log
@@ -234,7 +242,7 @@ recent commits and working-tree status. `Enter` jumps in (`tcd` + files picker),
   `VIRTUAL_ENV` before ty/ruff start — so monorepos that share one `.venv` above
   per-package `pyproject.toml` resolve correctly. A shell-activated venv wins
   over auto-detection; a `<leader>v` pick wins over both. The active venv (and a
-  Python/Rust/OCaml glyph) shows on the **right of the statusline**.
+  Python/Rust/OCaml/C glyph) shows on the **right of the statusline**.
 - **Venv dashboard (`<leader>v`).** A floating panel listing every discovered
   venv: the active one marked, each tagged `✓ ipykernel` / `✗ no kernel`. `<CR>`
   switches venv (restarts the LSP); `i` installs ipykernel into the highlighted
