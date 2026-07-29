@@ -187,6 +187,11 @@ Markdown, the fence's language tag decides (```python / ```ocaml).
 </p>
 <p align="center"><sub>Run a block, read the answer right under it — pandas in Python, <code>val …</code> in OCaml. The buffer is never touched.</sub></p>
 
+<p align="center">
+  <img src="assets/mdrepl.png" width="880" alt="Markdown notes with a python and an ocaml fence, both executed inline">
+</p>
+<p align="center"><sub>Works inside <b>Markdown</b> too: the fence's language tag picks the backend — literate notes, executable README.</sub></p>
+
 Both backends behave the same way: state **persists across runs** (define
 something in one send, use it in the next), errors render in red, and an output
 stays put until you **edit the code that produced it** — adding a line just
@@ -243,6 +248,11 @@ Inside diffview: `<Tab>`/`<S-Tab>` next/prev file, `gf` jump to real file, `g?` 
   <img src="assets/diff.png" width="880" alt="diffview: Zed-style review of working changes">
 </p>
 <p align="center"><sub><b>&lt;leader&gt;gd</b> — changed files panel + side-by-side diff with word-level highlights.</sub></p>
+
+<p align="center">
+  <img src="assets/prinline.png" width="880" alt="PR review in a worktree with an inline review comment rendered on the diff">
+</p>
+<p align="center"><sub><b>&lt;leader&gt;gP</b> — a real PR checked out into a throwaway worktree; reviewers' <b>inline comments render on the diff lines</b> they were left on.</sub></p>
 
 **`<leader>gP`** detects the forge from `origin`: GitHub via the `gh` CLI,
 Bitbucket via its REST API (set `BITBUCKET_USER` + `BITBUCKET_TOKEN`). The panel
