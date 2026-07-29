@@ -1027,7 +1027,7 @@ local function venv_populate(b)
   if active and active ~= "" then active = vim.fn.fnamemodify(active, ":p"):gsub("/+$", "") end
   local items = venv_collect()
   if #items == 0 then
-    add({ { "    no virtualenvs found", "Comment" } })
+    add({ { "    no virtualenvs found — ", "Comment" }, { "s", "Function" }, { " runs uv sync", "Comment" } })
   else
     for _, v in ipairs(items) do
       local cur, kern = v == active, venv_has_ipykernel(v)
@@ -1046,6 +1046,7 @@ local function venv_populate(b)
   add({
     { "  ↵", "Function" }, { " select   ", "Comment" },
     { "i", "Function" }, { " install ipykernel   ", "Comment" },
+    { "s", "Function" }, { " uv sync   ", "Comment" },
     { "q", "Function" }, { " close", "Comment" },
   })
   vim.bo[b].modifiable = true
@@ -1100,7 +1101,38 @@ local function venv_install()
   end)
 end
 
+-- s — uv sync: create/refresh the project venv straight from the dashboard.
+-- The project is the pyproject.toml/uv.lock root of the buffer you came FROM
+-- (src), falling back to the cwd — so it works from the "no virtualenvs found"
+-- empty state too. Async; the dashboard refreshes when the venv is ready.
+local function venv_sync(src, b)
+  if vim.fn.executable("uv") == 0 then
+    vim.notify("uv sync needs uv installed:  https://docs.astral.sh/uv/", vim.log.levels.WARN)
+    return
+  end
+  local markers = { "pyproject.toml", "uv.lock" }
+  local root = (src and vim.api.nvim_buf_is_valid(src) and vim.fs.root(src, markers))
+    or vim.fs.root(vim.fn.getcwd(), markers)
+  if not root then
+    vim.notify("No pyproject.toml / uv.lock found — nothing to uv sync", vim.log.levels.WARN)
+    return
+  end
+  vim.notify("uv sync — " .. vim.fn.fnamemodify(root, ":~") .. " …", vim.log.levels.INFO)
+  vim.system({ "uv", "sync" }, { text = true, cwd = root }, function(r)
+    vim.schedule(function()
+      if r.code == 0 then
+        vim.notify("uv sync done — venv ready", vim.log.levels.INFO)
+        if b and vim.api.nvim_buf_is_valid(b) then venv_populate(b) end
+      else
+        local msg = (r.stderr and r.stderr ~= "") and r.stderr or (r.stdout or "unknown error")
+        vim.notify("uv sync failed:\n" .. msg, vim.log.levels.ERROR)
+      end
+    end)
+  end)
+end
+
 vim.keymap.set("n", "<leader>v", function()
+  local src = vim.api.nvim_get_current_buf() -- project context for `s` (uv sync)
   local b = vim.api.nvim_create_buf(false, true)
   vim.bo[b].bufhidden = "wipe"
   venv_populate(b)
@@ -1120,9 +1152,10 @@ vim.keymap.set("n", "<leader>v", function()
   local opts = { buffer = b, nowait = true }
   vim.keymap.set("n", "<CR>", venv_select, opts)
   vim.keymap.set("n", "i", venv_install, opts)
+  vim.keymap.set("n", "s", function() venv_sync(src, b) end, opts)
   vim.keymap.set("n", "q", venv_close, opts)
   vim.keymap.set("n", "<Esc>", venv_close, opts)
-end, { desc = "Python venv dashboard (switch / install ipykernel)" })
+end, { desc = "Python venv dashboard (switch / uv sync / install ipykernel)" })
 
 -- Resolve a tool from PATH or, failing that, straight out of the opam switches
 -- ($OPAMROOT/*/bin, `default` preferred) — so OCaml tooling works even when

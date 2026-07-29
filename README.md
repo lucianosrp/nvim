@@ -127,7 +127,7 @@ of every mapping.
 | `<leader>?` | Help tags |
 | `<leader>k` | Keymaps cheatsheet |
 | `<leader>uc` | Colorschemes (live preview) |
-| `<leader>v` | Python venv dashboard — switch venv, `i` installs ipykernel |
+| `<leader>v` | Python venv dashboard — switch venv, `s` runs `uv sync`, `i` installs ipykernel |
 | `<leader>e` | File explorer (netrw `:Explore`) |
 | `<leader>cd` | cd to current file's dir (so pickers follow you) |
 | `<leader><Esc>` | Zoom the current window fullscreen / back (toggle) |
@@ -245,7 +245,9 @@ recent commits and working-tree status. `Enter` jumps in (`tcd` + files picker),
   Python/Rust/OCaml/C glyph) shows on the **right of the statusline**.
 - **Venv dashboard (`<leader>v`).** A floating panel listing every discovered
   venv: the active one marked, each tagged `✓ ipykernel` / `✗ no kernel`. `<CR>`
-  switches venv (restarts the LSP); `i` installs ipykernel into the highlighted
+  switches venv (restarts the LSP); `s` runs **`uv sync`** on the project you
+  came from — creating `.venv` from `pyproject.toml` when none exists yet (the
+  panel refreshes when it's ready); `i` installs ipykernel into the highlighted
   one (`uv pip install …`); `q` closes.
 - **Format on save.** Python buffers are formatted with **ruff** on `:w`
   (skipped for files > 1 MB). `<leader>F` formats manually.
