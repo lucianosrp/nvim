@@ -11,6 +11,11 @@ navigation. **Two goals drive every decision:**
 It uses Neovim built-ins plus a handful of small plugins, all managed by the
 built-in `vim.pack` (Neovim 0.12+). No lazy.nvim, no Mason, no LazyVim.
 
+<p align="center">
+  <img src="assets/code.png" width="880" alt="Editing Python with ty inlay hints, treesitter colors and the venv statusline">
+</p>
+<p align="center"><sub>Python with <b>ty</b> inlay hints, Treesitter colors, and the active venv on the statusline — transparent over your terminal.</sub></p>
+
 ---
 
 ## What's inside
@@ -133,6 +138,10 @@ of every mapping.
 | `<leader><Esc>` | Zoom the current window fullscreen / back (toggle) |
 | `Ctrl-h/j/k/l` | Move between split windows |
 
+<p align="center">
+  <img src="assets/fzf.png" width="880" alt="fzf-lua file picker with preview and devicons">
+</p>
+
 ### LSP (in code buffers)
 | Key | Action |
 |-----|--------|
@@ -153,6 +162,12 @@ errors. In the panel: **`r`** restarts the buffer's LSP clients, **`c`** copies
 the recent log errors to the clipboard, `q` closes. All floating windows (hover
 `K`, signature, diagnostics, this panel) carry a thin rounded border.
 
+<p align="center">
+  <img src="assets/lsp.png" width="49%" alt="LSP status dashboard">
+  <img src="assets/venv.png" width="49%" alt="Python venv dashboard">
+</p>
+<p align="center"><sub><b>&lt;leader&gt;l</b> LSP status &nbsp;·&nbsp; <b>&lt;leader&gt;v</b> venv dashboard (switch, uv sync, ipykernel)</sub></p>
+
 ### Inline REPL (Python · OCaml)
 One set of keys, one look: run code, and the result appears as dim **virtual
 lines under the code** — never written into the buffer. The buffer picks the
@@ -165,6 +180,12 @@ Markdown, the fence's language tag decides (```python / ```ocaml).
 | `<leader>rr` | Run the current paragraph — or, in Markdown, the enclosing fence |
 | `<leader>rc` | Clear the inline outputs |
 | `<leader>rk` | Restart the kernel / toplevel (fresh state) |
+
+<p align="center">
+  <img src="assets/repl.png" width="49%" alt="Inline Python REPL: pandas DataFrame printed under the code">
+  <img src="assets/ocaml.png" width="49%" alt="Inline OCaml REPL: val outputs under each block">
+</p>
+<p align="center"><sub>Run a block, read the answer right under it — pandas in Python, <code>val …</code> in OCaml. The buffer is never touched.</sub></p>
 
 Both backends behave the same way: state **persists across runs** (define
 something in one send, use it in the next), errors render in red, and an output
@@ -217,6 +238,11 @@ Fenced code blocks are highlighted in their own language (```python`, ```lua`, �
 | `<leader>gw` | **Worktrees** — list/switch (preview commits + status), `ctrl-n` create, `ctrl-x` remove |
 
 Inside diffview: `<Tab>`/`<S-Tab>` next/prev file, `gf` jump to real file, `g?` help.
+
+<p align="center">
+  <img src="assets/diff.png" width="880" alt="diffview: Zed-style review of working changes">
+</p>
+<p align="center"><sub><b>&lt;leader&gt;gd</b> — changed files panel + side-by-side diff with word-level highlights.</sub></p>
 
 **`<leader>gP`** detects the forge from `origin`: GitHub via the `gh` CLI,
 Bitbucket via its REST API (set `BITBUCKET_USER` + `BITBUCKET_TOKEN`). The panel
