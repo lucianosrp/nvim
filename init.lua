@@ -426,15 +426,20 @@ local function open_review(root, branch, base)
     return false
   end
   _G.__pr_review = { wt = wt, root = root, prev = vim.fn.getcwd() }
-  vim.cmd.tcd(wt) -- review inside the worktree; diffview targets it
+  vim.cmd.tcd(wt) -- review inside the worktree (pickers, :e, … follow)
   -- Diff merge-base(base, branch) vs the worktree's working tree. The worktree
   -- is detached at origin/branch (clean), so this equals the 3-dot PR diff — but
   -- the RIGHT pane is now the real on-disk file (not a diffview:// buffer), which
   -- is what lets inline comments anchor to the right buffer + new-file line.
+  -- -C pins diffview to the WORKTREE explicitly: DiffviewOpen creates its own
+  -- tabpage, which does NOT inherit this tab's tcd — resolving the repo from
+  -- cwd instead silently diffs the MAIN checkout (empty "Changes (0)" when its
+  -- tree matches the merge-base).
   local mb = vim.trim((vim.system({ "git", "-C", root, "merge-base",
     "origin/" .. base, "origin/" .. branch }, { text = true }):wait().stdout) or "")
   if load_diffview() then
-    vim.cmd("DiffviewOpen " .. (mb ~= "" and mb or ("origin/" .. base .. "...HEAD")))
+    vim.cmd("DiffviewOpen " .. (mb ~= "" and mb or ("origin/" .. base .. "...HEAD"))
+      .. " -C" .. vim.fn.fnameescape(wt))
   end
   return true
 end
