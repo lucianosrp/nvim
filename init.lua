@@ -49,8 +49,9 @@ vim.o.clipboard = "unnamedplus"
 local has_display = vim.env.WAYLAND_DISPLAY or vim.env.DISPLAY
 local is_remote = vim.env.SSH_TTY or vim.env.SSH_CONNECTION
 local is_windows = vim.fn.has("win32") == 1 -- Windows: let Neovim use its native clipboard
+local is_mac = vim.fn.has("mac") == 1 -- macOS: pbcopy/pbpaste work with no $DISPLAY set
 
-if not is_windows and (is_remote or not has_display) then
+if not is_windows and (is_remote or not (has_display or is_mac)) then
   local function osc52_copy(lines)
     local text = type(lines) == "table" and table.concat(lines, "\n") or lines
     io.stderr:write("\x1b]52;c;" .. vim.base64.encode(text) .. "\x1b\\")
@@ -92,7 +93,16 @@ o.termguicolors = true
 o.mouse = "a"
 o.scrolloff = 6
 o.sidescrolloff = 8
+-- wrap is OFF by default; <leader>uw flips it per window (see General keymaps).
+-- The presentation options are set once here so the toggle only flips `wrap`:
+-- linebreak breaks at word boundaries instead of mid-identifier, and
+-- breakindent keeps continuation lines under the code's own indent, so wrapped
+-- Python still reads as indented blocks in a narrow pane.
 o.wrap = false
+o.linebreak = true
+o.breakindent = true
+o.breakindentopt = "shift:2"    -- continuation lines nudged 2 further right
+o.showbreak = "↳ "
 o.splitright = true
 o.splitbelow = true
 o.ignorecase = true
@@ -124,8 +134,8 @@ vim.diagnostic.config({
 
 -- ---------------------------------------------------------------------------
 -- Minimal statusline (native, no plugin): relative path + modified/RO flags,
--- diagnostics counts (only when present), and line:col. Evaluated by `%!` so
--- it updates live. Kept deliberately small.
+-- then git branch, diagnostics counts (only when present), venv/language and
+-- line:col on the right. Kept deliberately small.
 -- ---------------------------------------------------------------------------
 function _G.statusline()
   local rel = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":.")
@@ -133,12 +143,19 @@ function _G.statusline()
   local flags = ""
   if vim.bo.modified then flags = flags .. " [+]" end
   if vim.bo.readonly or not vim.bo.modifiable then flags = flags .. " [RO]" end
+  -- git branch: gitsigns maintains vim.b.gitsigns_head per buffer — free here
+  -- (no subprocess in the render path; the statusline re-evaluates constantly)
+  local head = vim.b.gitsigns_head
+  local git = (head and head ~= "")
+    and ((vim.g.have_nerd_font and "\u{e725} " or "⎇ ") .. head:gsub("%%", "%%%%") .. "  ")
+    or ""
   local d = vim.diagnostic.count(0)
   local diag = ""
   if (d[vim.diagnostic.severity.ERROR] or 0) > 0 then diag = diag .. " E" .. d[vim.diagnostic.severity.ERROR] end
   if (d[vim.diagnostic.severity.WARN] or 0) > 0 then diag = diag .. " W" .. d[vim.diagnostic.severity.WARN] end
   -- %< truncate-from-here, %= left/right split, %l:%c line:col
-  return "%<" .. rel .. flags .. "%=" .. _G.venv_segment() .. diag .. "  %l:%c "
+  -- a literal % in the path must be doubled or it's parsed as a statusline item
+  return "%<" .. rel:gsub("%%", "%%%%") .. flags .. "%=" .. git .. _G.venv_segment() .. diag .. "  %l:%c "
 end
 
 -- Right-side venv / language indicator. Cheap: reads $VIRTUAL_ENV + filetype, no
@@ -165,7 +182,10 @@ function _G.venv_segment()
   end
   return ""
 end
-vim.o.statusline = "%!v:lua.statusline()"
+-- %{%...%} (not %!) so the function runs per WINDOW with that window's buffer
+-- current — inactive splits show their own file/flags/diagnostics, not the
+-- focused buffer's.
+vim.o.statusline = "%{%v:lua.statusline()%}"
 
 -- ---------------------------------------------------------------------------
 -- Plugins (built-in package manager — no lazy.nvim / no distro)
@@ -383,7 +403,7 @@ local function cleanup_review()
       pcall(vim.api.nvim_buf_delete, b, { force = true })
     end
   end
-  pcall(vim.cmd.tcd, r.prev) -- leave the worktree dir before deleting it
+  pcall(vim.cmd.tcd, vim.fn.fnameescape(r.prev)) -- leave the worktree dir before deleting it
   local rm = vim.system({ "git", "-C", r.root, "worktree", "remove", "--force", r.wt }, { text = true }):wait()
   vim.system({ "git", "-C", r.root, "worktree", "prune" }, { text = true }):wait()
   vim.notify(
@@ -395,7 +415,11 @@ end
 local function git_root_of(buf)
   local file = vim.api.nvim_buf_get_name(buf or 0)
   local dir = file ~= "" and vim.fs.dirname(file) or vim.fn.getcwd()
-  local r = vim.trim((vim.system({ "git", "-C", dir, "rev-parse", "--show-toplevel" }, { text = true }):wait().stdout) or "")
+  -- pcall: vim.system throws when git itself is missing — degrade, don't error
+  local ok, out = pcall(function()
+    return vim.system({ "git", "-C", dir, "rev-parse", "--show-toplevel" }, { text = true }):wait().stdout
+  end)
+  local r = ok and vim.trim(out or "") or ""
   return r ~= "" and r or nil
 end
 
@@ -426,7 +450,7 @@ local function open_review(root, branch, base)
     return false
   end
   _G.__pr_review = { wt = wt, root = root, prev = vim.fn.getcwd() }
-  vim.cmd.tcd(wt) -- review inside the worktree (pickers, :e, … follow)
+  vim.cmd.tcd(vim.fn.fnameescape(wt)) -- review inside the worktree (pickers, :e, … follow)
   -- Diff merge-base(base, branch) vs the worktree's working tree. The worktree
   -- is detached at origin/branch (clean), so this equals the 3-dot PR diff — but
   -- the RIGHT pane is now the real on-disk file (not a diffview:// buffer), which
@@ -489,7 +513,12 @@ end
 local function rollup(checks)
   local fail, pend, ok = false, false, false
   for _, c in ipairs(checks or {}) do
-    local s = (c.conclusion or c.state or c.status or ""):upper()
+    -- gh reports in-progress check runs with conclusion = "" (truthy in Lua!)
+    -- — take the first NON-EMPTY of conclusion / state / status
+    local s = c.conclusion
+    if s == nil or s == "" then s = c.state end
+    if s == nil or s == "" then s = c.status end
+    s = (s or ""):upper()
     if s:find("FAIL") or s == "ERROR" then fail = true
     elseif s:find("SUCCESS") or s == "COMPLETED" then ok = true -- SUCCESS (gh) / SUCCESSFUL (bitbucket)
     elseif s ~= "" then pend = true end
@@ -1266,8 +1295,13 @@ end
 local function repl_ensure()
   if repl.job and repl.job > 0 then return true end
   local venv = venv_for(0)
-  local py = venv and (venv .. (is_windows and "/Scripts/python.exe" or "/bin/python")) or "python3"
-  if vim.system({ py, "-c", "import ipykernel" }, { text = true }):wait().code ~= 0 then
+  local py = venv and (venv .. (is_windows and "/Scripts/python.exe" or "/bin/python"))
+    or (is_windows and "python" or "python3")
+  -- pcall: vim.system THROWS when the binary doesn't exist (no python at all)
+  local probed, pr = pcall(function()
+    return vim.system({ py, "-c", "import ipykernel" }, { text = true }):wait()
+  end)
+  if not probed or pr.code ~= 0 then
     vim.notify("Python REPL needs ipykernel in the active venv:\n  uv pip install ipykernel", vim.log.levels.WARN)
     return false
   end
@@ -1895,7 +1929,8 @@ local function lsp_dashboard(buf)
     end
     lines[#lines + 1] = text
   end
-  local function trunc(s, n) s = s or ""; return vim.fn.strchars(s) > n and (s:sub(1, n - 1) .. "…") or s end
+  -- char-aware truncation (byte :sub would cut multibyte paths mid-codepoint)
+  local function trunc(s, n) s = s or ""; return vim.fn.strchars(s) > n and (vim.fn.strcharpart(s, 0, n - 1) .. "…") or s end
   local function header(label) add({ { "  " }, { label, "Title" } }) end
 
   buf = buf or vim.api.nvim_get_current_buf()
@@ -2048,6 +2083,20 @@ map("n", "<leader>uh", function()
   vim.lsp.inlay_hint.enable(not on, { bufnr = 0 })
   vim.notify("Inlay hints " .. (on and "off" or "on"), vim.log.levels.INFO)
 end, { desc = "Toggle inlay hints" })
+-- <leader>uw — toggle line wrap for THIS window only, so a narrow split can
+-- wrap while a wide one keeps long lines intact. Presentation opts (linebreak /
+-- breakindent / showbreak) are already set in the options section.
+map("n", "<leader>uw", function()
+  vim.wo.wrap = not vim.wo.wrap
+  vim.notify("Line wrap " .. (vim.wo.wrap and "on" or "off"), vim.log.levels.INFO)
+end, { desc = "Toggle line wrap" })
+-- With wrap on, plain j/k jump over a whole wrapped line — move by SCREEN line
+-- instead. A count keeps its real-line meaning (3j still matches what
+-- relativenumber shows), and with wrap off these are plain j/k.
+map({ "n", "x" }, "j", function() return (vim.v.count == 0 and vim.wo.wrap) and "gj" or "j" end,
+  { expr = true, desc = "Down (screen line when wrapped)" })
+map({ "n", "x" }, "k", function() return (vim.v.count == 0 and vim.wo.wrap) and "gk" or "k" end,
+  { expr = true, desc = "Up (screen line when wrapped)" })
 map("n", "<leader>w", "<cmd>write<cr>", { desc = "Save" })
 -- Close the current buffer but KEEP the window/split (plain :bd closes the
 -- split — or quits nvim — on your last buffer). Refuses if there are unsaved
@@ -2160,7 +2209,15 @@ vim.api.nvim_create_autocmd("BufReadPre", {
       vim.opt_local.undofile = false
       vim.opt_local.foldmethod = "manual"
       vim.opt_local.spell = false
-      vim.cmd("syntax clear")
+      -- regex syntax loads on the FileType event AFTER BufReadPre (a `syntax
+      -- clear` here would be undone) — switch it off once that chain has run
+      vim.api.nvim_create_autocmd("FileType", {
+        buffer = args.buf,
+        once = true,
+        callback = vim.schedule_wrap(function()
+          if vim.api.nvim_buf_is_valid(args.buf) then vim.bo[args.buf].syntax = "OFF" end
+        end),
+      })
     end
   end,
 })
@@ -2219,11 +2276,29 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
 -- ---------------------------------------------------------------------------
 local config_file = vim.fn.stdpath("config") .. "/init.lua"
 
-local function reload_config()
+local reload_config
+
+-- External-edit watcher. Editors replace the file atomically, so the watched
+-- inode goes stale after every write — the watcher must be re-armed on each
+-- reload. A successful re-source re-arms via the watch_config() call at the end
+-- of this file; a FAILED one (syntax error mid-edit) re-arms in reload_config
+-- below, so the eventual fix is still picked up.
+local function watch_config()
+  if _G.__cfg_watch then pcall(function() _G.__cfg_watch:stop() end) end
+  _G.__cfg_watch = vim.uv.new_fs_event()
+  if _G.__cfg_watch then
+    _G.__cfg_watch:start(config_file, {}, vim.schedule_wrap(function(err)
+      if not err then reload_config() end
+    end))
+  end
+end
+
+reload_config = function()
   local now = vim.uv.now()
   if _G.__last_reload and now - _G.__last_reload < 200 then return end
   _G.__last_reload = now
   local ok, err = pcall(vim.cmd.source, vim.fn.fnameescape(config_file))
+  if not ok then watch_config() end
   vim.notify(
     ok and "init.lua reloaded" or ("init.lua reload failed: " .. tostring(err)),
     ok and vim.log.levels.INFO or vim.log.levels.ERROR
@@ -2236,12 +2311,4 @@ vim.api.nvim_create_autocmd("BufWritePost", {
   callback = reload_config,
 })
 
--- External-edit watcher. Re-armed by the re-source above, because editors
--- replace the file atomically and the watched inode goes stale after a write.
-if _G.__cfg_watch then pcall(function() _G.__cfg_watch:stop() end) end
-_G.__cfg_watch = vim.uv.new_fs_event()
-if _G.__cfg_watch then
-  _G.__cfg_watch:start(config_file, {}, vim.schedule_wrap(function(err)
-    if not err then reload_config() end
-  end))
-end
+watch_config()
